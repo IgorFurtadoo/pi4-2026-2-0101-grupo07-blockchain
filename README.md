@@ -6,5 +6,5 @@ Aplicação web de carteira de criptoativos custodial para a rede Ethereum Sepol
 
 - Igor de Toledo Furtado
 - Lucas Athanasio Bueno de Andrade
-- Guilhermo Perdomo Sevilla Neto
+- Guillermo Perdomo Sevilla Neto
 - Nicollas Fabbio
