@@ -17,7 +17,7 @@ Campos para gravar ou atualizar uma task (nomes de coluna em `snake_case`).
 | Campo | Tipo | Obrigatório | Exemplo |
 |---|---|---|---|
 | task_id | texto | sim | a3f1c2d4-5b6e-4f70-8a91-0c2d3e4f5a6b |
-| from_address | texto | sim | 0x71C7656EC7ab88b098defB751B7401B5f6d8976F |
+| source_address | texto | sim | 0x71C7656EC7ab88b098defB751B7401B5f6d8976F |
 | destination_address | texto | sim | 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 |
 | amount_eth | decimal | sim | 0.01 |
 | status | um de: PENDING, CONFIRMED, FAILED | sim | PENDING |
@@ -33,7 +33,7 @@ Campos devolvidos na leitura de uma task: os mesmos da entrada.
 | Campo | Tipo | Obrigatório | Exemplo |
 |---|---|---|---|
 | task_id | texto | sim | a3f1c2d4-5b6e-4f70-8a91-0c2d3e4f5a6b |
-| from_address | texto | sim | 0x71C7656EC7ab88b098defB751B7401B5f6d8976F |
+| source_address | texto | sim | 0x71C7656EC7ab88b098defB751B7401B5f6d8976F |
 | destination_address | texto | sim | 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 |
 | amount_eth | decimal | sim | 0.01 |
 | status | um de: PENDING, CONFIRMED, FAILED | sim | CONFIRMED |
