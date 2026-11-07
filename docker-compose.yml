@@ -1,0 +1,36 @@
+# Compose apenas para desenvolver o Blockchain Service com o seu MySQL.
+# O compose do sistema inteiro não mora neste repositório.
+
+services:
+  blockchain-db:
+    image: mysql:8.4.13
+    environment:
+      MYSQL_DATABASE: blockchain
+      MYSQL_USER: ${DB_USER:?defina DB_USER no .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD no .env}
+      # Senha de root aleatória: o serviço só usa o usuário acima.
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - blockchain-db-data:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      # Pelo 127.0.0.1 (TCP), que só abre depois de o schema.sql rodar.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Sem "ports": o banco só é acessível pela rede interna do compose.
+
+  blockchain-service:
+    build: .
+    env_file: .env
+    depends_on:
+      blockchain-db:
+        condition: service_healthy
+    ports:
+      # Só no loopback, para testar com curl no desenvolvimento.
+      - "127.0.0.1:8081:8081"
+
+volumes:
+  blockchain-db-data:
