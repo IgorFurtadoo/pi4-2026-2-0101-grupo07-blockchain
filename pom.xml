@@ -20,6 +20,7 @@
         <jackson.version>2.22.4</jackson.version>
         <hibernate.version>7.4.15.Final</hibernate.version>
         <mysql.version>26.10.0</mysql.version>
+        <web3j.version>6.1.0</web3j.version>
         <junit.version>5.14.4</junit.version>
     </properties>
 
@@ -34,6 +35,12 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.version}</version>
+        </dependency>
+        <!-- Geração do par de chaves e endereço Ethereum (o módulo core entra no passo 4). -->
+        <dependency>
+            <groupId>org.web3j</groupId>
+            <artifactId>crypto</artifactId>
+            <version>${web3j.version}</version>
         </dependency>
         <!-- Acesso ao banco: Hibernate em modo validate contra o schema.sql. -->
         <dependency>
