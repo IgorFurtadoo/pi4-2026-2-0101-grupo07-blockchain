@@ -204,6 +204,21 @@ class WalletServiceTest {
     }
 
     @Test
+    void mixedCaseWithWrongChecksumIsRejectedBeforeRepositoryAndClient() {
+        storeWallet();
+        repository.searched.clear();
+        // Exemplo dos contratos com a caixa de duas letras trocada.
+        String wrongChecksum = "0x71c7656EC7ab88b098defB751B7401B5f6d8976F";
+
+        ApiException e = assertThrows(ApiException.class, () -> service.getBalance(wrongChecksum));
+
+        assertEquals(400, e.getStatus());
+        assertEquals("ADDRESS_INVALID", e.getCode());
+        assertTrue(repository.searched.isEmpty(), "não deve consultar o repository");
+        assertTrue(ethereumClient.calls.isEmpty(), "não deve chamar o RPC");
+    }
+
+    @Test
     void unknownWalletIsNotFoundWithoutCallingClient() {
         ApiException e = assertThrows(ApiException.class, () -> service.getBalance(STORED_ADDRESS));
 

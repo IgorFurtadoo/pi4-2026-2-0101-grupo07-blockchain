@@ -20,7 +20,6 @@ import java.security.GeneralSecurityException;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.Locale;
-import java.util.regex.Pattern;
 
 /**
  * Regras das carteiras custodiais (CT4, CT5, CT7).
@@ -30,9 +29,6 @@ public class WalletService {
     private static final Logger log = LoggerFactory.getLogger(WalletService.class);
 
     private static final int PRIVATE_KEY_BYTES = 32;
-
-    /** "0x" + 40 hex em qualquer caixa. O checksum de caixa mista não é conferido (seção 6). */
-    private static final Pattern ADDRESS_PATTERN = Pattern.compile("^0x[0-9a-fA-F]{40}$");
 
     /** O AppConfig só aceita o chainId da Sepolia, então a rede é sempre esta. */
     private static final String NETWORK = "SEPOLIA";
@@ -77,15 +73,11 @@ public class WalletService {
 
     /**
      * CT7: saldo de uma carteira custodial, consultado no RPC (CT8) e convertido
-     * de wei para ETH exato. Ordem: valida o formato, confere a carteira no banco
-     * e só então chama a rede.
+     * de wei para ETH exato. Ordem: valida o endereço (AddressValidator), confere
+     * a carteira no banco e só então chama a rede.
      */
     public BalanceResponse getBalance(String ethereumAddress) {
-        if (ethereumAddress == null || !ADDRESS_PATTERN.matcher(ethereumAddress).matches()) {
-            throw new ApiException(400, "ADDRESS_INVALID", "Endereço Ethereum com formato inválido.");
-        }
-
-        String address = ethereumAddress.toLowerCase(Locale.ROOT);
+        String address = AddressValidator.toCanonical(ethereumAddress);
         if (walletRepository.findByAddress(address).isEmpty()) {
             throw new ApiException(404, "WALLET_NOT_FOUND", "Carteira não encontrada.");
         }
