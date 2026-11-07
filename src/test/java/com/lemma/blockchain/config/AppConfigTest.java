@@ -126,4 +126,14 @@ class AppConfigTest {
         assertFalse(text.contains("test-service-key"));
         assertFalse(text.contains(TEST_KEY));
     }
+
+    @Test
+    void toStringDoesNotExposeRpcUrl() {
+        Map<String, String> env = validEnv();
+        env.put("RPC_URL", "https://sepolia.provedor-exemplo.io/v3/test-api-key");
+
+        String text = AppConfig.fromEnv(env).toString();
+        assertFalse(text.contains("provedor-exemplo"));
+        assertFalse(text.contains("test-api-key"));
+    }
 }

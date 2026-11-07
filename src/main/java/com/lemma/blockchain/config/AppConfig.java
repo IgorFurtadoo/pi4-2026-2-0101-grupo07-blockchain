@@ -56,13 +56,15 @@ public record AppConfig(
                 workerIntervalSeconds, rpcTimeoutSeconds);
     }
 
-    /** Não imprime segredos (senha do banco, chave de serviço, chave de cifragem). */
+    /**
+     * Não imprime segredos (senha do banco, chave de serviço, chave de cifragem).
+     * Também omite a URL do RPC: provedores pagos costumam levar a chave de API na URL.
+     */
     @Override
     public String toString() {
         return "AppConfig[serverPort=" + serverPort
                 + ", dbUrl=" + dbUrl
                 + ", dbUser=" + dbUser
-                + ", rpcUrl=" + rpcUrl
                 + ", chainId=" + chainId
                 + ", coreApiWebhookUrl=" + coreApiWebhookUrl
                 + ", workerIntervalSeconds=" + workerIntervalSeconds
