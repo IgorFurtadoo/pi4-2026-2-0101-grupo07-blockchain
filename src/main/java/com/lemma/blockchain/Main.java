@@ -1,5 +1,7 @@
 package com.lemma.blockchain;
 
+import com.lemma.blockchain.client.EthereumClient;
+import com.lemma.blockchain.client.Web3jEthereumClient;
 import com.lemma.blockchain.config.AppConfig;
 import com.lemma.blockchain.controller.ErrorHandler;
 import com.lemma.blockchain.controller.ServiceKeyFilter;
@@ -44,10 +46,11 @@ public class Main {
             return;
         }
 
-        // Montagem manual: repository → service → controller.
+        // Montagem manual: repository e client → service → controller.
         WalletRepository walletRepository = new WalletRepository(sessionFactory);
         KeyCipher keyCipher = new KeyCipher(config.walletEncryptionKey());
-        WalletService walletService = new WalletService(walletRepository, keyCipher);
+        EthereumClient ethereumClient = new Web3jEthereumClient(config.rpcUrl(), config.rpcTimeoutSeconds());
+        WalletService walletService = new WalletService(walletRepository, keyCipher, ethereumClient);
         WalletController walletController = new WalletController(walletService);
 
         Javalin app = Javalin.create(javalin -> {
