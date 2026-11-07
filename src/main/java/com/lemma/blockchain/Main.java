@@ -2,6 +2,7 @@ package com.lemma.blockchain;
 
 import com.lemma.blockchain.config.AppConfig;
 import com.lemma.blockchain.controller.ErrorHandler;
+import com.lemma.blockchain.controller.ServiceKeyFilter;
 import com.lemma.blockchain.exception.ApiException;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
@@ -29,6 +30,7 @@ public class Main {
         }
 
         Javalin app = Javalin.create(javalin -> {
+            javalin.routes.before(new ServiceKeyFilter(config.serviceKey()));
             javalin.routes.exception(ApiException.class, ErrorHandler::handleApiException);
             javalin.routes.exception(Exception.class, ErrorHandler::handleUnexpected);
         }).start(config.serverPort());
