@@ -1,5 +1,5 @@
 # Compose apenas para desenvolver o Blockchain Service com o seu MySQL.
-# O compose do sistema inteiro não mora neste repositório.
+# Onde mora o compose do sistema inteiro ainda não foi decidido.
 
 services:
   blockchain-db:
