@@ -181,9 +181,9 @@ Todas as rotas exigem `X-Service-Key`. A comparação da chave deve ser em tempo
 | CT14 `getTask` | `GET /tasks/{taskId}` (`TaskController`) | Lê a task no banco | 200 `{taskId, status, transactionHash?, failureReason?, updatedAt}` | 401, 404 TASK_NOT_FOUND, 500 |
  
 Validações (no service):
-- **Endereço**: `^0x[0-9a-fA-F]{40}$`. Rejeitar também checksum inválido em caixa mista é mais seguro; aceitar é mais simples. [Aberto, pequeno]
-- **Valor**: `BigDecimal` maior que zero e com no máximo 18 casas decimais. Mais casas não cabem em wei e viram `AMOUNT_INVALID`.
-- **Corpo da requisição**: corpo vazio ou JSON inválido devolve 400. Os contratos do Blockchain Service não preveem código específico; usar `ADDRESS_INVALID`/`AMOUNT_INVALID` conforme o campo ausente ou criar `REQUEST_INVALID`, que o Core API já usa em CT3 e CT15. [Aberto, pequeno]
+- **Endereço**: `^0x[0-9a-fA-F]{40}$`. Tudo minúsculo ou tudo maiúsculo passa; em caixa mista, o checksum EIP-55 precisa estar certo, senão `ADDRESS_INVALID`. Regra única em `AddressValidator`, usada no CT7 e no CT10. [Decidido em 07/11, H05.1]
+- **Valor**: `BigDecimal` maior que zero, com no máximo 18 casas decimais e 20 dígitos inteiros (limite do `DECIMAL(38,18)`); zeros à direita não contam. Mais casas não cabem em wei e viram `AMOUNT_INVALID`.
+- **Corpo da requisição**: corpo ausente, JSON malformado ou campo com tipo errado devolve 400 `REQUEST_INVALID` (o mesmo código que o Core API usa em CT3 e CT15; registrado no CT10). Campo ausente continua com o código do próprio campo (`ADDRESS_INVALID`/`AMOUNT_INVALID`). [Decidido em 07/11, H05.1]
 Formato de erro de todos os endpoints [Contrato]: status HTTP + `{ "code": "...", "message": "..." }`. Um único handler central converte `ApiException` nesse formato, e qualquer exceção não prevista vira 500 `INTERNAL_ERROR` sem expor detalhe interno.
  
 CT14 [Sugestão]: ler só do banco. O contrato diz que o serviço "pode" checar o recibo antes de responder, mas o worker já faz isso a cada ciclo; duplicar não traz ganho.
@@ -315,8 +315,9 @@ Limites que o ADR deve declarar abertamente (a banca valoriza):
 | Situação | HTTP | `code` |
 |---|---|---|
 | `X-Service-Key` ausente ou errada | 401 | SERVICE_KEY_INVALID |
-| Endereço inválido | 400 | ADDRESS_INVALID |
-| Valor ausente, zero, negativo ou com mais de 18 casas | 400 | AMOUNT_INVALID |
+| Corpo ausente, JSON malformado ou campo com tipo errado (só no CT10) | 400 | REQUEST_INVALID |
+| Endereço inválido (formato ou checksum EIP-55 em caixa mista) | 400 | ADDRESS_INVALID |
+| Valor ausente, zero, negativo, com mais de 18 casas ou mais de 20 dígitos inteiros | 400 | AMOUNT_INVALID |
 | Carteira inexistente | 404 | WALLET_NOT_FOUND |
 | Task inexistente | 404 | TASK_NOT_FOUND |
 | RPC fora, lento ou com limite excedido (só no CT7) | 502 | RPC_UNAVAILABLE |
@@ -359,7 +360,11 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 3. Número de confirmações (P3): hoje, 1.
 4. Se o PublicNode aguenta o ritmo e não devolve nonce atrasado entre servidores. Se aparecer "nonce too low" logo após uma confirmação, tratar com nova tentativa.
 5. Build tool (Maven ou Gradle) e versão do Java.
-6. Código de erro para corpo inválido (seção 6).
+6. ~~Código de erro para corpo inválido (seção 6).~~ Decidido em 07/11 (H05.1): `REQUEST_INVALID`, registrado no CT10.
+ 
+### Decididas durante a implementação
+- Checksum EIP-55 em caixa mista é conferido; errado vira `ADDRESS_INVALID` (seção 6). Decidido em 07/11 (H05.1).
+- Corpo inválido no CT10 vira 400 `REQUEST_INVALID` (seção 6). Decidido em 07/11 (H05.1).
 ## 13. Ordem de implementação e critério de pronto
  
 | # | Passo | Classes principais | Cards | Pronto quando |
