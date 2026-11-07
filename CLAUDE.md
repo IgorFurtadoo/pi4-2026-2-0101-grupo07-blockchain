@@ -100,6 +100,7 @@ O `.env.example` traz `WALLET_ENCRYPTION_KEY=GERAR_COM_openssl_rand_-base64_32`,
 | Testar se está no ar (sem `X-Service-Key`: 401) | `curl -i http://127.0.0.1:8081/` |
 | Smoke do `POST /wallets` (sem chave, chave errada, chave certa) | `scripts/smoke-wallet.sh` (com o compose no ar; não imprime a `SERVICE_KEY`) |
 | Smoke do `GET /wallets/{ethereumAddress}/balance` (401, 400, 404 e 200 com o RPC real do `.env`) | `scripts/smoke-balance.sh` (com o compose no ar; não imprime a `SERVICE_KEY`) |
+| Smoke do `POST /transactions` e do `GET /tasks/{taskId}` (401, 400 de endereço, valor e JSON, 404, 202 e 200 `PENDING`, linha no MySQL, rota inexistente 404, método errado 405) | `scripts/smoke-tasks.sh` (com o compose no ar; não imprime a `SERVICE_KEY`; cada execução deixa uma task `PENDING` de carteira sem saldo no banco) |
 | Testar 502 `RPC_UNAVAILABLE` sem mexer no `.env` (segunda instância com RPC numa porta fechada, mesmo banco) | `docker compose run --rm -d --name bcs-rpc-down -e RPC_URL=http://127.0.0.1:9 -p 127.0.0.1:8083:8081 blockchain-service`, depois `EXPECT_RPC_DOWN=1 BASE_URL=http://127.0.0.1:8083 scripts/smoke-balance.sh` e `docker stop bcs-rpc-down`. **Só vale enquanto não existe o worker (passo 6); depois disso, uma segunda instância seria um segundo worker no mesmo banco.** |
 | Ver as tabelas | `docker compose exec blockchain-db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u "$MYSQL_USER" blockchain -e "SHOW TABLES"'` |
 | Derrubar | `docker compose down` |
