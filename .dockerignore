@@ -1,0 +1,11 @@
+# O build da imagem só precisa de pom.xml e src/.
+# Em especial, o .env nunca pode entrar na imagem.
+.env
+target/
+.git/
+.idea/
+.vscode/
+.claude/
+docs/
+*.iml
+*.log
