@@ -1,0 +1,13 @@
+# Segredos: nunca versionar. Só o .env.example vai para o git.
+.env
+
+# Saída do Maven
+target/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# Logs
+*.log
