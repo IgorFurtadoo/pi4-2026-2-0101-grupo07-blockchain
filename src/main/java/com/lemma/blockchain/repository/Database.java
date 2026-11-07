@@ -1,6 +1,7 @@
 package com.lemma.blockchain.repository;
 
 import com.lemma.blockchain.config.AppConfig;
+import com.lemma.blockchain.model.Task;
 import com.lemma.blockchain.model.Wallet;
 import org.hibernate.SessionFactory;
 import org.hibernate.cfg.AvailableSettings;
@@ -20,6 +21,7 @@ public final class Database {
     public static SessionFactory createSessionFactory(AppConfig config) {
         return new Configuration()
                 .addAnnotatedClass(Wallet.class)
+                .addAnnotatedClass(Task.class)
                 .setProperty(AvailableSettings.JAKARTA_JDBC_URL, config.dbUrl())
                 .setProperty(AvailableSettings.JAKARTA_JDBC_USER, config.dbUser())
                 .setProperty(AvailableSettings.JAKARTA_JDBC_PASSWORD, config.dbPassword())
