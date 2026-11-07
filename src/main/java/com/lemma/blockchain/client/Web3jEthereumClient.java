@@ -1,0 +1,55 @@
+package com.lemma.blockchain.client;
+
+import okhttp3.OkHttpClient;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
+import org.web3j.protocol.core.methods.response.EthGetBalance;
+import org.web3j.protocol.http.HttpService;
+
+import java.io.IOException;
+import java.math.BigInteger;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * EthereumClient com Web3j sobre HTTP (seção 8 do desenho).
+ *
+ * A URL do RPC fica só dentro do HttpService. As mensagens de erro citam apenas
+ * o tipo da falha, e a exceção original não é encadeada: a mensagem dela pode
+ * trazer host ou caminho da URL, onde provedores costumam pôr o token.
+ */
+public class Web3jEthereumClient implements EthereumClient {
+
+    private final Web3j web3j;
+
+    public Web3jEthereumClient(String rpcUrl, int timeoutSeconds) {
+        // Timeout de conexão e de leitura (RPC_TIMEOUT_SECONDS, seção 3.2 do desenho).
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+                .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+                .build();
+        this.web3j = Web3j.build(new HttpService(rpcUrl, httpClient));
+    }
+
+    @Override
+    public BigInteger getBalance(String address) throws RpcException {
+        EthGetBalance response;
+        try {
+            response = web3j.ethGetBalance(address, DefaultBlockParameterName.LATEST).send();
+        } catch (IOException | RuntimeException e) {
+            // IOException: conexão recusada, tempo esgotado.
+            // RuntimeException: HTTP 429/5xx (ClientConnectionException) ou resposta ilegível.
+            throw new RpcException("falha na chamada ao RPC: " + e.getClass().getSimpleName());
+        }
+
+        if (response.hasError()) {
+            throw new RpcException("RPC respondeu com erro JSON-RPC " + response.getError().getCode());
+        }
+
+        try {
+            return response.getBalance();
+        } catch (RuntimeException e) {
+            // "result" ausente ou fora do formato hexadecimal.
+            throw new RpcException("RPC respondeu com saldo ilegível");
+        }
+    }
+}

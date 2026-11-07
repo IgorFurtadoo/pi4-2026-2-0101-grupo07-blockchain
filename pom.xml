@@ -36,10 +36,16 @@
             <artifactId>jackson-databind</artifactId>
             <version>${jackson.version}</version>
         </dependency>
-        <!-- Geração do par de chaves e endereço Ethereum (o módulo core entra no passo 4). -->
+        <!-- Geração do par de chaves e endereço Ethereum. -->
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>crypto</artifactId>
+            <version>${web3j.version}</version>
+        </dependency>
+        <!-- Cliente JSON-RPC do provedor (CT8 em diante). Traz o OkHttp como dependência. -->
+        <dependency>
+            <groupId>org.web3j</groupId>
+            <artifactId>core</artifactId>
             <version>${web3j.version}</version>
         </dependency>
         <!-- Acesso ao banco: Hibernate em modo validate contra o schema.sql. -->

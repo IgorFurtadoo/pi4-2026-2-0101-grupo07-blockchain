@@ -9,6 +9,10 @@
     <logger name="org.hibernate" level="WARN"/>
     <logger name="com.zaxxer.hikari" level="WARN"/>
 
+    <!-- Web3j e OkHttp podem citar a URL do RPC, que pode carregar token do provedor. -->
+    <logger name="org.web3j" level="WARN"/>
+    <logger name="okhttp3" level="WARN"/>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
