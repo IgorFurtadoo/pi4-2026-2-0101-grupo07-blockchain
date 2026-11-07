@@ -20,4 +20,9 @@ public class WalletController {
         String ethereumAddress = walletService.createWallet();
         ctx.status(201).json(new CreateWalletResponse(ethereumAddress));
     }
+
+    /** CT7: GET /wallets/{ethereumAddress}/balance → 200 { ethereumAddress, balanceEth, network }. */
+    public void balance(Context ctx) {
+        ctx.json(walletService.getBalance(ctx.pathParam("ethereumAddress")));
+    }
 }

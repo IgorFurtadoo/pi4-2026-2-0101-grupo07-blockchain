@@ -3,6 +3,7 @@ package com.lemma.blockchain;
 import com.lemma.blockchain.client.EthereumClient;
 import com.lemma.blockchain.client.Web3jEthereumClient;
 import com.lemma.blockchain.config.AppConfig;
+import com.lemma.blockchain.config.JsonConfig;
 import com.lemma.blockchain.controller.ErrorHandler;
 import com.lemma.blockchain.controller.ServiceKeyFilter;
 import com.lemma.blockchain.controller.WalletController;
@@ -54,11 +55,13 @@ public class Main {
         WalletController walletController = new WalletController(walletService);
 
         Javalin app = Javalin.create(javalin -> {
+            javalin.jsonMapper(JsonConfig.jsonMapper());
             javalin.routes.before(new ServiceKeyFilter(config.serviceKey()));
             javalin.routes.exception(ApiException.class, ErrorHandler::handleApiException);
             javalin.routes.exception(Exception.class, ErrorHandler::handleUnexpected);
 
             javalin.routes.post("/wallets", walletController::create); // CT4
+            javalin.routes.get("/wallets/{ethereumAddress}/balance", walletController::balance); // CT7
         }).start(config.serverPort());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
