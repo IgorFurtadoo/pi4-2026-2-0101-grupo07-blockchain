@@ -58,12 +58,12 @@ public record AppConfig(
 
     /**
      * Não imprime segredos (senha do banco, chave de serviço, chave de cifragem).
-     * Também omite a URL do RPC: provedores pagos costumam levar a chave de API na URL.
+     * Também omite as URLs do RPC e do banco: provedores pagos costumam levar a chave
+     * de API na URL, e uma URL JDBC pode carregar credencial na query string.
      */
     @Override
     public String toString() {
         return "AppConfig[serverPort=" + serverPort
-                + ", dbUrl=" + dbUrl
                 + ", dbUser=" + dbUser
                 + ", chainId=" + chainId
                 + ", coreApiWebhookUrl=" + coreApiWebhookUrl

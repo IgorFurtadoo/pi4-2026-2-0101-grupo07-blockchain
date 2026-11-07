@@ -128,12 +128,15 @@ class AppConfigTest {
     }
 
     @Test
-    void toStringDoesNotExposeRpcUrl() {
+    void toStringDoesNotExposeUrls() {
         Map<String, String> env = validEnv();
         env.put("RPC_URL", "https://sepolia.provedor-exemplo.io/v3/test-api-key");
+        env.put("DB_URL", "jdbc:mysql://blockchain-db:3306/blockchain?password=test-jdbc-password");
 
         String text = AppConfig.fromEnv(env).toString();
         assertFalse(text.contains("provedor-exemplo"));
         assertFalse(text.contains("test-api-key"));
+        assertFalse(text.contains("jdbc:mysql"));
+        assertFalse(text.contains("test-jdbc-password"));
     }
 }
