@@ -17,6 +17,7 @@
 
         <javalin.version>7.2.4</javalin.version>
         <logback.version>1.5.38</logback.version>
+        <jackson.version>2.22.4</jackson.version>
         <junit.version>5.14.4</junit.version>
     </properties>
 
@@ -25,6 +26,12 @@
             <groupId>io.javalin</groupId>
             <artifactId>javalin</artifactId>
             <version>${javalin.version}</version>
+        </dependency>
+        <!-- JSON das respostas; o Javalin detecta o Jackson 2 no classpath. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
         </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>

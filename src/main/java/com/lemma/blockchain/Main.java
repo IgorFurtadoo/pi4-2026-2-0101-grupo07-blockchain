@@ -1,6 +1,8 @@
 package com.lemma.blockchain;
 
 import com.lemma.blockchain.config.AppConfig;
+import com.lemma.blockchain.controller.ErrorHandler;
+import com.lemma.blockchain.exception.ApiException;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,7 +28,10 @@ public class Main {
             return;
         }
 
-        Javalin app = Javalin.create().start(config.serverPort());
+        Javalin app = Javalin.create(javalin -> {
+            javalin.routes.exception(ApiException.class, ErrorHandler::handleApiException);
+            javalin.routes.exception(Exception.class, ErrorHandler::handleUnexpected);
+        }).start(config.serverPort());
         Runtime.getRuntime().addShutdownHook(new Thread(app::stop));
 
         log.info("Blockchain Service no ar na porta {}", config.serverPort());
