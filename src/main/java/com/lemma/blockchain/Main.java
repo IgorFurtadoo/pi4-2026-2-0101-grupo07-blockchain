@@ -3,8 +3,12 @@ package com.lemma.blockchain;
 import com.lemma.blockchain.config.AppConfig;
 import com.lemma.blockchain.controller.ErrorHandler;
 import com.lemma.blockchain.controller.ServiceKeyFilter;
+import com.lemma.blockchain.controller.WalletController;
+import com.lemma.blockchain.crypto.KeyCipher;
 import com.lemma.blockchain.exception.ApiException;
 import com.lemma.blockchain.repository.Database;
+import com.lemma.blockchain.repository.WalletRepository;
+import com.lemma.blockchain.service.WalletService;
 import io.javalin.Javalin;
 import org.hibernate.SessionFactory;
 import org.slf4j.Logger;
@@ -40,10 +44,18 @@ public class Main {
             return;
         }
 
+        // Montagem manual: repository → service → controller.
+        WalletRepository walletRepository = new WalletRepository(sessionFactory);
+        KeyCipher keyCipher = new KeyCipher(config.walletEncryptionKey());
+        WalletService walletService = new WalletService(walletRepository, keyCipher);
+        WalletController walletController = new WalletController(walletService);
+
         Javalin app = Javalin.create(javalin -> {
             javalin.routes.before(new ServiceKeyFilter(config.serviceKey()));
             javalin.routes.exception(ApiException.class, ErrorHandler::handleApiException);
             javalin.routes.exception(Exception.class, ErrorHandler::handleUnexpected);
+
+            javalin.routes.post("/wallets", walletController::create); // CT4
         }).start(config.serverPort());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
