@@ -5,6 +5,10 @@
         </encoder>
     </appender>
 
+    <!-- Menos ruído de Hibernate e HikariCP na subida. O SQL não é logado. -->
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
