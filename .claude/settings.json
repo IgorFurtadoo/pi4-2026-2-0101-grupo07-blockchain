@@ -1,0 +1,15 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
+  },
+  "permissions": {
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git config:*)",
+      "Read(./.env)",
+      "Edit(./.env)"
+    ]
+  }
+}
