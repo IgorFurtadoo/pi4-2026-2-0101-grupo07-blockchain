@@ -78,4 +78,26 @@ Critério de pronto de cada passo: coluna "Pronto quando" da seção 13 do desen
 
 ## Comandos
 
-(Preencher após o passo 1, com os comandos reais: build, testes, subir o compose, derrubar o compose.)
+Pré-requisitos: Java 21, Maven, Docker com Compose (usuário no grupo `docker`).
+
+Configuração inicial (uma vez):
+
+```bash
+cp .env.example .env
+# no .env, troque DB_PASSWORD e SERVICE_KEY, e gere a chave de cifragem:
+openssl rand -base64 32   # cole a saída em WALLET_ENCRYPTION_KEY
+```
+
+O `.env.example` traz `WALLET_ENCRYPTION_KEY=GERAR_COM_openssl_rand_-base64_32`, valor propositalmente inválido: o serviço não sobe até a chave ser trocada.
+
+| Para quê | Comando |
+|---|---|
+| Testes | `mvn test` |
+| Build do jar (`target/blockchain-service.jar`) | `mvn package` |
+| Build da imagem | `docker compose build` |
+| Subir serviço e banco | `docker compose up --build` (ou `-d` em segundo plano) |
+| Ver estado e logs | `docker compose ps` / `docker compose logs -f blockchain-service` |
+| Testar se está no ar (sem rotas ainda: 404) | `curl -i http://127.0.0.1:8081/` |
+| Ver as tabelas | `docker compose exec blockchain-db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u "$MYSQL_USER" blockchain -e "SHOW TABLES"'` |
+| Derrubar | `docker compose down` |
+| Derrubar e apagar o banco (o `schema.sql` roda de novo no próximo `up`) | `docker compose down -v` |
