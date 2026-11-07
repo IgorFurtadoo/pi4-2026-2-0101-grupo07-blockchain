@@ -1,6 +1,6 @@
 # ADR 0003: cifrar a chave privada das carteiras com AES-256-GCM
 
-**Status:** proposto
+**Status:** aceito
 
 **Contexto:** No modelo custodial, é o Blockchain Service que gera o par de chaves de cada carteira e assina as transações em nome do usuário (ADR 0001). Para assinar em segundo plano, quando a task é processada (ADR 0002), o serviço precisa recuperar a chave privada sem interação do usuário. A premissa P7 da especificação define que a chave privada fica cifrada na tabela `wallet` do Banco do Blockchain Service e nunca sai do serviço, mas deixa em aberto o mecanismo de cifragem; o contrato CT5 acrescenta que a chave de cifragem fica em variável de ambiente, nunca no banco. A rede é a Sepolia Testnet, sem valor real, o sistema roda em docker-compose sem infraestrutura de nuvem, e a equipe adotou como diretriz não introduzir dependências sem necessidade comprovada. A recuperação de carteira está fora do escopo (Parte 4 da Entrega 1); rotação de chave, exportação de chave e custódia em hardware não foram previstas.
 
