@@ -33,7 +33,12 @@ Resposta `202`.
 | Quando | O que volta |
 |---|---|
 | `X-Service-Key` ausente ou incorreta | HTTP 401, `code` SERVICE_KEY_INVALID |
+| Corpo ausente, JSON malformado ou campo com tipo errado | HTTP 400, `code` REQUEST_INVALID |
 | Endereço com formato inválido | HTTP 400, `code` ADDRESS_INVALID |
-| `amountEth` ausente, zero ou negativo | HTTP 400, `code` AMOUNT_INVALID |
+| `amountEth` ausente, zero, negativo, com mais de 18 casas decimais ou com mais de 20 dígitos inteiros | HTTP 400, `code` AMOUNT_INVALID |
 | `sourceAddress` sem carteira em CT5 `wallet` | HTTP 404, `code` WALLET_NOT_FOUND |
 | Falha inesperada, incluindo Banco do Blockchain Service indisponível | HTTP 500, `code` INTERNAL_ERROR |
+
+Notas:
+- `amountEth` com mais de 18 casas decimais também é AMOUNT_INVALID: 1 wei é 10⁻¹⁸ ETH, e mais casas não cabem em wei. Zeros à direita não contam. O limite de 20 dígitos inteiros é o da coluna `amount_eth` (DECIMAL(38,18)) em CT11.
+- Campo ausente devolve o código do próprio campo (ADDRESS_INVALID ou AMOUNT_INVALID), não REQUEST_INVALID.
