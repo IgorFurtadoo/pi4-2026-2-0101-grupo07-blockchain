@@ -1,0 +1,30 @@
+# ADR 0003: cifrar a chave privada das carteiras com AES-256-GCM
+
+**Status:** proposto
+
+**Contexto:** No modelo custodial, é o Blockchain Service que gera o par de chaves de cada carteira e assina as transações em nome do usuário (ADR 0001). Para assinar em segundo plano, quando a task é processada (ADR 0002), o serviço precisa recuperar a chave privada sem interação do usuário. A premissa P7 da especificação define que a chave privada fica cifrada na tabela `wallet` do Banco do Blockchain Service e nunca sai do serviço, mas deixa em aberto o mecanismo de cifragem; o contrato CT5 acrescenta que a chave de cifragem fica em variável de ambiente, nunca no banco. A rede é a Sepolia Testnet, sem valor real, o sistema roda em docker-compose sem infraestrutura de nuvem, e a equipe adotou como diretriz não introduzir dependências sem necessidade comprovada. A recuperação de carteira está fora do escopo (Parte 4 da Entrega 1); rotação de chave, exportação de chave e custódia em hardware não foram previstas.
+
+**Decisão:** A chave privada de 32 bytes de cada carteira é cifrada com AES-256-GCM (`AES/GCM/NoPadding` do `javax.crypto`, sem biblioteca extra), com tag de autenticação de 128 bits e IV aleatório de 12 bytes gerado por `SecureRandom` para cada registro. O valor gravado na coluna `encrypted_private_key` é o Base64 de `IV || texto cifrado || tag` (60 bytes, 80 caracteres). O endereço da carteira, na forma canônica em minúsculas usada no banco, entra como dado associado (AAD): o registro só decifra na linha da sua própria carteira, e uma chave cifrada copiada para outra linha é recusada. A chave AES vem da variável de ambiente `WALLET_ENCRYPTION_KEY` (32 bytes aleatórios em Base64, gerados com `openssl rand -base64 32`), nunca do banco nem do repositório; o serviço se recusa a subir se ela estiver ausente ou não tiver 32 bytes. A chave privada decifrada existe apenas em memória, durante a assinatura, e nunca é escrita em log, resposta HTTP ou mensagem de exceção.
+
+**Alternativas consideradas:**
+
+- Guardar a chave privada em claro no banco: descartada porque contraria a premissa P7 e porque qualquer acesso de leitura ao banco, inclusive um backup ou dump esquecido, entregaria o controle de todas as carteiras.
+- Cifrar com AES sem autenticação (por exemplo, AES-CBC) ou com AES-GCM sem AAD: descartada porque, sem autenticação, uma alteração no valor cifrado não é detectada, e, sem o endereço como AAD, o valor de uma carteira poderia ser copiado para outra linha e decifrado como se fosse dela. O GCM entrega sigilo e integridade em uma única primitiva, já disponível no JDK.
+- Derivar a chave de cifragem de uma senha (PBKDF2, scrypt ou Argon2): descartada porque a senha continuaria em uma variável de ambiente, ou seja, haveria o mesmo segredo único com um passo a mais. Usar a senha de login do usuário também não serve: o Blockchain Service não conhece usuários nem senhas (ADR 0001), a assinatura acontece em segundo plano sem o usuário presente, e esquecer a senha significaria perder a carteira.
+- Keystore JSON padrão da Ethereum (formato V3 do Web3j, com scrypt): descartada porque cada arquivo também exige uma senha, que ficaria no mesmo ambiente; o scrypt torna cada assinatura lenta de propósito; e o formato é maior que a coluna prevista, sem ganho de proteção no nosso cenário.
+- Criptografia de envelope (uma chave de dados por carteira, cifrada por uma chave mestra): descartada neste momento porque, sem um KMS para guardar a chave mestra, ela continuaria em variável de ambiente; o ganho real, que é facilitar a rotação da chave mestra, não faz parte do escopo, e o modelo acrescenta uma camada a mais para implementar e explicar.
+- KMS ou HSM gerenciado em nuvem (AWS KMS, Google Cloud KMS, Azure Key Vault): descartada porque exige conta e credenciais de nuvem, custo e dependência de rede em um sistema que roda localmente em docker-compose, além de sair da lista de dependências do projeto. É a alternativa indicada para produção.
+- Biblioteca de criptografia de terceiros (por exemplo, Google Tink): descartada porque o `javax.crypto` já oferece AES-GCM e uma dependência a mais não traria proteção adicional para este uso.
+
+**Consequências:**
+
+- Positivas: um dump ou backup do banco, sozinho, não revela nenhuma chave privada; qualquer alteração no valor cifrado, ou a troca de valores entre carteiras, é detectada na decifragem em vez de produzir uma chave errada; a implementação usa apenas o JDK e cabe em uma classe pequena e testável (`KeyCipher`); e configuração ausente ou inválida aparece na subida do serviço, não na primeira transação.
+- Negativas e limites, declarados abertamente:
+  - Quem tiver acesso ao banco **e** à variável `WALLET_ENCRYPTION_KEY` lê todas as chaves privadas. A proteção é tão forte quanto o cuidado com o ambiente do container e com o arquivo `.env`.
+  - A chave de cifragem fica visível em `docker inspect` e no ambiente do processo para quem tem acesso ao Docker da máquina.
+  - Perder `WALLET_ENCRYPTION_KEY` significa perder todas as carteiras: as chaves cifradas não podem ser recuperadas e os fundos ficam inacessíveis.
+  - Não há rotação da chave de cifragem: trocá-la exigiria decifrar e cifrar de novo todos os registros, procedimento que não será implementado.
+  - Não há recuperação de carteira nem exportação de chave para o usuário. A recuperação de carteira está fora do escopo (Parte 4 da Entrega 1); rotação de chave, exportação de chave e custódia em hardware não foram previstas.
+  - Durante a assinatura, a chave privada fica em claro na memória do processo; um acesso à memória do container a exporia.
+  - O IV aleatório de 12 bytes é seguro para o volume do projeto, mas o GCM não tolera repetição de IV com a mesma chave, e cifrar um número muito grande de registros com uma única chave exigiria a rotação que não existe.
+  - Essa solução só é aceitável porque o sistema opera na Sepolia Testnet, sem valor real. Em produção, a chave de cifragem, ou a própria assinatura, deveria ficar em um HSM ou KMS, com controle de acesso, auditoria e rotação.
