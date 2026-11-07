@@ -97,7 +97,8 @@ O `.env.example` traz `WALLET_ENCRYPTION_KEY=GERAR_COM_openssl_rand_-base64_32`,
 | Build da imagem | `docker compose build` |
 | Subir serviço e banco | `docker compose up --build` (ou `-d` em segundo plano) |
 | Ver estado e logs | `docker compose ps` / `docker compose logs -f blockchain-service` |
-| Testar se está no ar (sem rotas ainda: 404) | `curl -i http://127.0.0.1:8081/` |
+| Testar se está no ar (sem `X-Service-Key`: 401) | `curl -i http://127.0.0.1:8081/` |
+| Smoke do `POST /wallets` (sem chave, chave errada, chave certa) | `scripts/smoke-wallet.sh` (com o compose no ar; não imprime a `SERVICE_KEY`) |
 | Ver as tabelas | `docker compose exec blockchain-db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u "$MYSQL_USER" blockchain -e "SHOW TABLES"'` |
 | Derrubar | `docker compose down` |
 | Derrubar e apagar o banco (o `schema.sql` roda de novo no próximo `up`) | `docker compose down -v` |
