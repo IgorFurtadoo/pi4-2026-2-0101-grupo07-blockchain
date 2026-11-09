@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Smoke test do POST /transactions (CT10) e do GET /tasks/{taskId} (CT14) contra o
-# compose de desenvolvimento. Nada vai à rede: este passo só grava e lê a task.
+# compose de desenvolvimento, incluindo o worker (Fase B) com o RPC real do .env:
+# a task de uma carteira nova, sem saldo, é assinada e enviada, a rede recusa
+# ("insufficient funds") e ela termina FAILED/REJECTED_BY_NETWORK, sem hash.
+# Não gasta ETH. O worker muda a task em poucos segundos, então as verificações
+# logo após o 202 aceitam qualquer estado intermediário.
 #
 # Uso: scripts/smoke-tasks.sh  (com "docker compose up -d" já rodando)
 #
@@ -32,19 +36,26 @@ check() {
   fi
 }
 
+# fetch <método> <caminho> <cabeçalho X-Service-Key ou vazio> [corpo JSON]
+# Deixa o status em $STATUS e o corpo da resposta em $BODY, sem verificar nada.
+fetch() {
+  local method="$1" path="$2" header="$3"
+  local data=()
+  if [ "$#" -ge 4 ]; then
+    printf '%s' "$4" > "$REQUEST_FILE"
+    data=(-H 'Content-Type: application/json' --data-binary @"$REQUEST_FILE")
+  fi
+  STATUS="$(printf '%s\n' "$header" | curl -s -o "$BODY_FILE" -w '%{http_code}' \
+    -X "$method" -H @- "${data[@]}" "$BASE_URL$path")"
+  BODY="$(cat "$BODY_FILE")"
+}
+
 # request <rótulo> <método> <caminho> <status esperado> <regex do corpo> <cabeçalho X-Service-Key ou vazio> [corpo JSON]
 # Deixa o corpo da resposta em $BODY.
 request() {
-  local label="$1" method="$2" path="$3" expected_status="$4" body_regex="$5" header="$6"
-  local status
-  local data=()
-  if [ "$#" -ge 7 ]; then
-    printf '%s' "$7" > "$REQUEST_FILE"
-    data=(-H 'Content-Type: application/json' --data-binary @"$REQUEST_FILE")
-  fi
-  status="$(printf '%s\n' "$header" | curl -s -o "$BODY_FILE" -w '%{http_code}' \
-    -X "$method" -H @- "${data[@]}" "$BASE_URL$path")"
-  BODY="$(cat "$BODY_FILE")"
+  local label="$1" method="$2" path="$3" expected_status="$4" body_regex="$5"
+  fetch "$method" "$path" "${@:6}"
+  local status="$STATUS"
 
   local ok=0
   if [ "$status" = "$expected_status" ] && [[ "$BODY" =~ $body_regex ]]; then
@@ -57,6 +68,10 @@ KEY_HEADER="X-Service-Key: $SERVICE_KEY"
 ADDRESS_WITHOUT_WALLET="0x0000000000000000000000000000000000000001"
 DESTINATION="0x5B38Da6a701c568545dCfcB03FcB875f56beddC4"
 UUID_REGEX='[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
+DATE_REGEX='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z'
+HASH_REGEX='0x[0-9a-f]{64}'
+# Quanto esperar o worker levar a task ao estado final.
+WAIT_SECONDS="${WAIT_SECONDS:-30}"
 
 error_regex() {
   printf '^\\{"code":"%s","message":"[^"]+"\\}$' "$1"
@@ -84,7 +99,7 @@ request "origem sem carteira" POST "/transactions" \
   404 "$(error_regex WALLET_NOT_FOUND)" "$KEY_HEADER" \
   "$(transaction_body "$ADDRESS_WITHOUT_WALLET" "$DESTINATION" 0.01)"
 
-# ---------- caminho feliz: carteira nova → task PENDING ----------
+# ---------- carteira nova sem saldo → task → worker → recusa da rede ----------
 
 request "criar carteira" POST "/wallets" \
   201 '^\{"ethereumAddress":"0x[0-9a-fA-F]{40}"\}$' "$KEY_HEADER"
@@ -96,17 +111,31 @@ request "pedido de envio" POST "/transactions" \
 TASK_ID="$(printf '%s' "$BODY" | sed -E 's/.*"taskId":"([^"]+)".*/\1/')"
 
 if [[ "$TASK_ID" =~ ^$UUID_REGEX$ ]]; then
-  request "consultar task" GET "/tasks/$TASK_ID" \
-    200 "^\\{\"taskId\":\"$TASK_ID\",\"status\":\"PENDING\",\"updatedAt\":\"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\"\\}$" \
+  # Logo após o 202, o worker pode já ter assinado (hash) ou até terminado (FAILED).
+  request "consultar task (qualquer estado intermediário)" GET "/tasks/$TASK_ID" \
+    200 "^\\{\"taskId\":\"$TASK_ID\",\"status\":\"(PENDING|FAILED)\"(,\"transactionHash\":\"$HASH_REGEX\")?(,\"failureReason\":\"REJECTED_BY_NETWORK\")?,\"updatedAt\":\"$DATE_REGEX\"\\}$" \
     "$KEY_HEADER"
 
+  # Espera o worker: carteira sem saldo → a rede recusa o envio.
+  waited=0
+  while [ "$waited" -lt "$WAIT_SECONDS" ]; do
+    fetch GET "/tasks/$TASK_ID" "$KEY_HEADER"
+    [[ "$BODY" =~ \"status\":\"(CONFIRMED|FAILED)\" ]] && break
+    sleep 2
+    waited=$((waited + 2))
+  done
+  FINAL_REGEX="^\\{\"taskId\":\"$TASK_ID\",\"status\":\"FAILED\",\"failureReason\":\"REJECTED_BY_NETWORK\",\"updatedAt\":\"$DATE_REGEX\"\\}$"
+  ok=0
+  [ "$STATUS" = "200" ] && [[ "$BODY" =~ $FINAL_REGEX ]] && ok=1
+  check "worker: FAILED/REJECTED_BY_NETWORK sem hash em até ${WAIT_SECONDS} s" "$ok" "$STATUS $BODY (após ~${waited} s)"
+
   # O taskId só entra no SQL depois de casar com a regex de UUID acima.
-  SQL="SELECT status, transaction_hash IS NULL FROM task WHERE task_id = '$TASK_ID'"
+  SQL="SELECT status, failure_reason, transaction_hash IS NULL, signed_transaction IS NULL FROM task WHERE task_id = '$TASK_ID'"
   ROW="$(docker compose exec -T -e SQL="$SQL" blockchain-db \
     sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -N -B -u "$MYSQL_USER" blockchain -e "$SQL"' | tr '\t' ' ')"
   ok=0
-  [ "$ROW" = "PENDING 1" ] && ok=1
-  check "linha no MySQL (status, hash nulo)" "$ok" "'$ROW' (esperado 'PENDING 1')"
+  [ "$ROW" = "FAILED REJECTED_BY_NETWORK 1 1" ] && ok=1
+  check "linha no MySQL (status, motivo, hash nulo, assinada nula)" "$ok" "'$ROW' (esperado 'FAILED REJECTED_BY_NETWORK 1 1')"
 else
   check "taskId da resposta" 0 "'$TASK_ID' não é um UUID v4"
 fi
