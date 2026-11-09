@@ -100,13 +100,14 @@ blockchain/
     TaskWorker.java            runCycle(): fases A e B (seção 7)
   repository/
     WalletRepository.java      save, findByAddress
-    TaskRepository.java        save, findById, findPendingWithHash, findPendingWithoutHash
+    TaskRepository.java        save, findById, update, findPendingWithoutHash,
+                               existsPendingWithHashFrom (passo 7: findPendingWithHash)
   model/
     Wallet.java, Task.java     entidades Hibernate
     TaskStatus.java, FailureReason.java   enums
   client/
-    EthereumClient.java        interface do RPC: getBalance, getNonce, getGasPrice,
-                               sendRaw, getReceipt, getTransactionByHash
+    EthereumClient.java        interface do RPC: getBalance, getTransactionCount, getGasPrice,
+                               sendRawTransaction (passo 7: getReceipt, getTransactionByHash)
     Web3jEthereumClient.java
     CoreApiClient.java         webhook (CT15)
   crypto/KeyCipher.java        AES-GCM
@@ -294,7 +295,7 @@ Valor em wei: `Convert.toWei(amountEth, Unit.ETHER).toBigIntegerExact()`. O `Exa
  
 A transação é do tipo legado (P8). Confirmar em teste real que o PublicNode aceita e que o gás de `eth_gasPrice` é suficiente na Sepolia; se ficar presa, o ajuste mais simples é um multiplicador configurável sobre o preço do gás. [Aberto, só se acontecer]
  
-Os nomes de métodos acima são da API do Web3j 4.x como eu a conheço; conferir contra a versão fixada no projeto antes de codar.
+Os nomes de métodos acima foram conferidos no Web3j 6.1.0 (versão fixada no `pom.xml`) no H07.1. No teste, `TransactionDecoder.decode` devolve um `SignedRawTransaction`, de onde saem remetente (`getFrom`) e `chainId`.
  
 ## 9. Segurança da chave (insumo do ADR 0003)
  
@@ -342,9 +343,9 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 ### Mudanças que tocam contratos já escritos
 | Mudança | Contrato | Por que |
 |---|---|---|
-| Coluna interna `signed_transaction` em `task`; `transaction_hash` passa a ser gravado antes do envio (e apagado se a rede recusar) | Emendar CT11 | Permite reenviar a mesma transação com segurança e retomar após queda |
+| Coluna interna `signed_transaction` em `task`; `transaction_hash` passa a ser gravado antes do envio (e apagado se a rede recusar) | Emendar CT11 | Permite reenviar a mesma transação com segurança e retomar após queda. **Aplicada no H07.1 (CT11 e CT14 emendados).** |
 | Chamada `eth_getTransactionByHash` | Novo contrato (CT24) | Distinguir "rede não conhece o hash" de "ainda sem recibo" |
-| Falha de conexão no envio (CT23) | CT23 diz FAILED/INTERNAL_ERROR; este desenho mantém PENDING e tenta de novo | Evita marcar FAILED uma transação que pode ter chegado à rede |
+| Falha de conexão no envio (CT23) | CT23 diz FAILED/INTERNAL_ERROR; este desenho mantém PENDING e tenta de novo | Evita marcar FAILED uma transação que pode ter chegado à rede. **Aplicada no H07.1 (CT23 emendado).** |
  
 ### Decisões para o grupo [Sugestão]
 1. Banco como fila + um worker, em vez de uma thread por task.
@@ -365,6 +366,14 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 ### Decididas durante a implementação
 - Checksum EIP-55 em caixa mista é conferido; errado vira `ADDRESS_INVALID` (seção 6). Decidido em 07/11 (H05.1).
 - Corpo inválido no CT10 vira 400 `REQUEST_INVALID` (seção 6). Decidido em 07/11 (H05.1).
+- Worker de envio, Fase B (seção 7.3). Decidido pelo Igor em 08/11 (H07.1):
+  1. **Banco:** coluna `signed_transaction TEXT NULL` em `task`, mapeada na entidade e emendada no CT11. No banco de desenvolvimento entrou por `ALTER TABLE` (sem `down -v`, para não perder a carteira de demonstração).
+  2. **RPC:** `EthereumClient` ganhou `getTransactionCount` (bloco `pending`, CT21), `getGasPrice` (CT22) e `sendRawTransaction` (CT23). `RpcException` tem duas subclasses: `RpcUnavailableException` (conexão, tempo esgotado, HTTP 429/5xx, resposta ilegível) e `RpcRejectedException` (objeto `error` do JSON-RPC, com código e mensagem do nó). O CT7 continua devolvendo 502 `RPC_UNAVAILABLE` nos dois casos. Nenhuma mensagem contém a URL do RPC; a mensagem do nó pode ir ao log.
+  3. **Task e repository:** transições simples na entidade (`markSigned`, `markRejected`, `markFailed`), todas alterando `updated_at`. `TaskRepository` ganhou `findPendingWithoutHash` (mais antigas primeiro), `existsPendingWithHashFrom` e `update` (merge), cada um com transação própria; nenhuma transação de banco fica aberta durante chamada RPC.
+  4. **Ciclo (`TaskWorker.runCycle`):** ordem carteira → nonce → gás → decifrar (AAD = endereço) → assinar (legada, gas 21000, `chainId` do `AppConfig`) → zerar a chave → gravar hash e transação assinada → enviar. Carteira ausente, chave que não decifra ou falha de RPC no nonce/gás: `FAILED`/`INTERNAL_ERROR`, nada enviado. Recusa no envio: `FAILED`/`REJECTED_BY_NETWORK`, hash e transação assinada apagados. Sem resposta no envio: nada muda (fica `PENDING` com hash; a Fase A reenvia), divergência do CT23 registrada no próprio contrato. Hash do nó diferente do calculado: aviso no log, vale o local. No máximo uma task por carteira: pula a carteira com task `PENDING` com hash ou já tratada no mesmo ciclo. Exceção inesperada numa task: só log, estado mantido, as outras seguem. Logs só com taskId, estado e hash.
+     **Limitação aceita da chave na memória:** o `byte[]` decifrado é zerado no `finally`, mas o Web3j cria um `BigInteger` (imutável) ao montar o `ECKeyPair`, e esse valor fica na memória até o coletor de lixo. Mitigação: `ECKeyPair` e `Credentials` só como variáveis locais do método que assina, a chave nunca vira `String` e nunca vai ao log.
+  5. **Agendamento:** `ScheduledExecutorService` de uma thread com `scheduleWithFixedDelay(WORKER_INTERVAL_SECONDS)` e `try/catch` geral no ciclo. No desligamento: para o Javalin, para o executor e espera até 30 s o ciclo terminar antes de fechar a `SessionFactory`; o compose de desenvolvimento usa `stop_grace_period: 40s`.
+  6. **Fora deste passo:** Fase A (recibo, reenvio, webhook), tempo limite de task e multiplicador de gás.
 ## 13. Ordem de implementação e critério de pronto
  
 | # | Passo | Classes principais | Cards | Pronto quando |
