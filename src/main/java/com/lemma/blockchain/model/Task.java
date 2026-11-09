@@ -101,6 +101,22 @@ public class Task {
         this.updatedAt = now;
     }
 
+    /** Recibo com status 0x1 (CT16): CONFIRMED. Mantém hash e transação assinada. */
+    public void markConfirmed(Instant now) {
+        this.status = TaskStatus.CONFIRMED;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Recibo com status 0x0 (CT16): FAILED com TRANSACTION_REVERTED. A transação foi
+     * minerada (e pagou a taxa), então o hash e a transação assinada são mantidos.
+     */
+    public void markReverted(Instant now) {
+        this.status = TaskStatus.FAILED;
+        this.failureReason = FailureReason.TRANSACTION_REVERTED;
+        this.updatedAt = now;
+    }
+
     /** Falha antes do envio (carteira, chave, nonce ou gás): FAILED com o motivo dado. */
     public void markFailed(FailureReason reason, Instant now) {
         this.status = TaskStatus.FAILED;

@@ -44,6 +44,18 @@ public class TaskRepository {
     }
 
     /**
+     * Fase A do worker: tasks PENDING já assinadas (enviadas ou em envio), das mais
+     * antigas para as mais novas.
+     */
+    public List<Task> findPendingWithHash() {
+        return sessionFactory.fromTransaction(session -> session.createSelectionQuery(
+                        "from Task t where t.status = :status and t.transactionHash is not null"
+                                + " order by t.createdAt, t.taskId", Task.class)
+                .setParameter("status", TaskStatus.PENDING)
+                .getResultList());
+    }
+
+    /**
      * Diz se a carteira já tem uma task PENDING com hash (enviada ou em envio).
      * O worker usa isto para manter uma task por carteira de cada vez (seção 7.3).
      * O endereço vem da task, já em minúsculo.

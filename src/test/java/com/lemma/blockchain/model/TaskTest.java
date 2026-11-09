@@ -52,6 +52,34 @@ class TaskTest {
     }
 
     @Test
+    void markConfirmedKeepsHashAndSignedTransaction() {
+        Task task = newTask();
+        task.markSigned(HASH, SIGNED, CREATED);
+
+        task.markConfirmed(LATER);
+
+        assertEquals(TaskStatus.CONFIRMED, task.getStatus());
+        assertNull(task.getFailureReason());
+        assertEquals(HASH, task.getTransactionHash());
+        assertEquals(SIGNED, task.getSignedTransaction());
+        assertEquals(LATER, task.getUpdatedAt());
+    }
+
+    @Test
+    void markRevertedFailsAndKeepsHashAndSignedTransaction() {
+        Task task = newTask();
+        task.markSigned(HASH, SIGNED, CREATED);
+
+        task.markReverted(LATER);
+
+        assertEquals(TaskStatus.FAILED, task.getStatus());
+        assertEquals(FailureReason.TRANSACTION_REVERTED, task.getFailureReason());
+        assertEquals(HASH, task.getTransactionHash());
+        assertEquals(SIGNED, task.getSignedTransaction());
+        assertEquals(LATER, task.getUpdatedAt());
+    }
+
+    @Test
     void markFailedStoresReason() {
         Task task = newTask();
 
