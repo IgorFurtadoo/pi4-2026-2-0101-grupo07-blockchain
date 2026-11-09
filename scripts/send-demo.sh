@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Envio real na Sepolia pelo Blockchain Service: POST /transactions (CT10), depois
-# consulta GET /tasks/{taskId} (CT14) até o worker gravar o hash e imprime o link
-# do Etherscan.
+# consulta GET /tasks/{taskId} (CT14) a cada 2 s. Imprime o hash e o link do
+# Etherscan assim que o worker envia, e continua até o estado final: CONFIRMED
+# (sai 0) ou FAILED (imprime o motivo e sai 1). Se WAIT_SECONDS (padrão 120)
+# acabar antes, imprime o último estado e sai 1.
 #
 # Uso: scripts/send-demo.sh <origem> <destino> <valorEth>
 #   origem: carteira custodial deste serviço, abastecida na torneira
 #   exemplo: scripts/send-demo.sh 0xSuaCarteira 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 0.001
-#
-# Atenção: até o passo 7 (Fase A), a task enviada fica PENDING com hash e bloqueia
-# as próximas tasks da mesma carteira (uma task por carteira de cada vez).
 #
 # A SERVICE_KEY vem da variável exportada ou, se não houver, do ambiente do
 # container. Ela nunca é impressa: vai para o curl pela entrada padrão (-H @-).
@@ -35,7 +34,7 @@ if ! [[ "$AMOUNT" =~ ^[0-9]+(\.[0-9]{1,18})?$ ]]; then
 fi
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8081}"
-WAIT_SECONDS="${WAIT_SECONDS:-60}"
+WAIT_SECONDS="${WAIT_SECONDS:-120}"
 cd "$(dirname "$0")/.."
 
 if [ -z "${SERVICE_KEY:-}" ]; then
@@ -64,32 +63,32 @@ if [ "$STATUS" != "202" ]; then
   exit 1
 fi
 TASK_ID="$(printf '%s' "$BODY" | sed -E 's/.*"taskId":"([^"]+)".*/\1/')"
-echo "Task $TASK_ID aceita (PENDING). Esperando o worker assinar e enviar..."
+echo "Task $TASK_ID aceita (PENDING). Esperando o worker assinar, enviar e confirmar..."
 
+HASH=""
 waited=0
 while [ "$waited" -lt "$WAIT_SECONDS" ]; do
   call GET "/tasks/$TASK_ID"
+  # O hash é gravado antes do envio; se a rede recusar, ele some e a task fica FAILED.
+  if [ -z "$HASH" ] && [[ "$BODY" =~ \"transactionHash\":\"(0x[0-9a-fA-F]{64})\" ]]; then
+    HASH="${BASH_REMATCH[1]}"
+    echo "Enviada. Hash: $HASH"
+    echo "https://sepolia.etherscan.io/tx/$HASH"
+    echo "Esperando o recibo..."
+  fi
+  if [[ "$BODY" =~ \"status\":\"CONFIRMED\" ]]; then
+    echo "Confirmada."
+    echo "https://sepolia.etherscan.io/tx/$HASH"
+    exit 0
+  fi
   if [[ "$BODY" =~ \"status\":\"FAILED\" ]]; then
     REASON="$(printf '%s' "$BODY" | sed -E 's/.*"failureReason":"([^"]+)".*/\1/')"
     echo "Task FAILED: $REASON (detalhe no log: docker compose logs blockchain-service)" >&2
     exit 1
   fi
-  if [[ "$BODY" =~ \"transactionHash\":\"(0x[0-9a-fA-F]{64})\" ]]; then
-    HASH="${BASH_REMATCH[1]}"
-    # O hash é gravado antes do envio: espera um ciclo e confere que a rede não recusou.
-    sleep 3
-    call GET "/tasks/$TASK_ID"
-    if [[ "$BODY" =~ \"status\":\"FAILED\" ]]; then
-      echo "A rede recusou o envio: $BODY" >&2
-      exit 1
-    fi
-    echo "Enviada. Hash: $HASH"
-    echo "https://sepolia.etherscan.io/tx/$HASH"
-    exit 0
-  fi
   sleep 2
   waited=$((waited + 2))
 done
 
-echo "Sem hash após ${WAIT_SECONDS} s. Último estado: $BODY" >&2
+echo "Sem estado final após ${WAIT_SECONDS} s. Último estado: $STATUS $BODY" >&2
 exit 1
