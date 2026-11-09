@@ -36,3 +36,5 @@ Campos de `objeto (Receipt)` usados pelo sistema:
 | Transação ainda não incluída em bloco | `result` nulo (não é erro). A task segue `PENDING` |
 | `status` igual a 0x0 | A task vai para `FAILED`, `failureReason` TRANSACTION_REVERTED |
 | Provedor fora do ar, tempo esgotado ou limite excedido | Falha de conexão ou HTTP 429/5xx. A task segue `PENDING` e a verificação é repetida |
+
+Nota (emenda do H08.1, decidida pelo responsável do módulo (Igor)): o `status` do recibo precisa ser `0x1` ou `0x0`. Recibo sem `status`, com outro valor ou sem `blockNumber` legível é tratado como resposta ilegível: a task segue `PENDING` e a verificação é repetida, e nunca vira `CONFIRMED`. Erro JSON-RPC (objeto `error`) também mantém a task `PENDING`. Sem recibo, o acompanhamento consulta CT24 `rpcGetTransactionByHash`.

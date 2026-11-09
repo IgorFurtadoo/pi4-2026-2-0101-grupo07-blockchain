@@ -8,10 +8,14 @@ import org.web3j.protocol.core.Response;
 import org.web3j.protocol.core.methods.response.EthGasPrice;
 import org.web3j.protocol.core.methods.response.EthGetBalance;
 import org.web3j.protocol.core.methods.response.EthGetTransactionCount;
+import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
+import org.web3j.protocol.core.methods.response.EthTransaction;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.protocol.http.HttpService;
 
 import java.io.IOException;
 import java.math.BigInteger;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
@@ -76,6 +80,48 @@ public class Web3jEthereumClient implements EthereumClient {
             throw new RpcUnavailableException("RPC respondeu com hash ilegível");
         }
         return hash;
+    }
+
+    /**
+     * Lê o status do recibo e valida à mão. Não usa TransactionReceipt.isStatusOK():
+     * no Web3j 6.1.0 ele devolve true quando o status é nulo, e um recibo sem status
+     * não pode virar CONFIRMED.
+     */
+    @Override
+    public Optional<ReceiptInfo> getTransactionReceipt(String txHash) throws RpcException {
+        EthGetTransactionReceipt response = send(web3j.ethGetTransactionReceipt(txHash));
+        Optional<TransactionReceipt> receipt = response.getTransactionReceipt();
+        if (receipt.isEmpty()) {
+            return Optional.empty(); // ainda não incluída em bloco
+        }
+
+        String status = receipt.get().getStatus();
+        boolean success;
+        if ("0x1".equals(status)) {
+            success = true;
+        } else if ("0x0".equals(status)) {
+            success = false;
+        } else {
+            throw new RpcUnavailableException("RPC respondeu com recibo ilegível (status)");
+        }
+
+        BigInteger blockNumber;
+        try {
+            blockNumber = receipt.get().getBlockNumber();
+        } catch (RuntimeException e) {
+            throw new RpcUnavailableException("RPC respondeu com recibo ilegível (bloco)");
+        }
+        if (blockNumber == null) {
+            throw new RpcUnavailableException("RPC respondeu com recibo ilegível (bloco)");
+        }
+        return Optional.of(new ReceiptInfo(success, blockNumber));
+    }
+
+    @Override
+    public boolean isTransactionKnown(String txHash) throws RpcException {
+        // result nulo: a rede não conhece o hash (CT24).
+        EthTransaction response = send(web3j.ethGetTransactionByHash(txHash));
+        return response.getTransaction().isPresent();
     }
 
     /**

@@ -13,11 +13,13 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -34,7 +36,7 @@ class Web3jEthereumClientTest {
     private static final String SIGNED_HEX = "0xf86c0785";
     private static final int TIMEOUT_SECONDS = 1;
 
-    /** Uma chamada do EthereumClient, para repetir o mesmo cenário de erro nas quatro. */
+    /** Uma chamada do EthereumClient, para repetir o mesmo cenário de erro em todas. */
     private interface RpcCall {
         Object call(EthereumClient client) throws RpcException;
     }
@@ -46,6 +48,8 @@ class Web3jEthereumClientTest {
         ALL_CALLS.put("getTransactionCount", client -> client.getTransactionCount(ADDRESS));
         ALL_CALLS.put("getGasPrice", EthereumClient::getGasPrice);
         ALL_CALLS.put("sendRawTransaction", client -> client.sendRawTransaction(SIGNED_HEX));
+        ALL_CALLS.put("getTransactionReceipt", client -> client.getTransactionReceipt(HASH));
+        ALL_CALLS.put("isTransactionKnown", client -> client.isTransactionKnown(HASH));
     }
 
     private HttpServer server;
@@ -95,6 +99,18 @@ class Web3jEthereumClientTest {
 
     private static String result(String value) {
         return "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"" + value + "\"}";
+    }
+
+    /** Resposta JSON-RPC com result em JSON cru (objeto ou null). */
+    private static String rawResult(String json) {
+        return "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":" + json + "}";
+    }
+
+    /** Recibo mínimo com os campos que o sistema usa (CT16); status null = campo ausente. */
+    private static String receipt(String status, String blockNumber) {
+        String statusField = status == null ? "" : ",\"status\":\"" + status + "\"";
+        return rawResult("{\"transactionHash\":\"" + HASH + "\",\"blockNumber\":\"" + blockNumber + "\""
+                + statusField + "}");
     }
 
     private static void assertMessageHidesUrl(RpcException e, String rpcUrl) {
@@ -154,6 +170,70 @@ class Web3jEthereumClientTest {
         assertEquals(HASH, hash);
         assertTrue(lastRequest.contains("\"eth_sendRawTransaction\""), lastRequest);
         assertTrue(lastRequest.contains(SIGNED_HEX), lastRequest);
+    }
+
+    @Test
+    void successfulReceiptReturnsSuccessAndBlock() throws Exception {
+        String url = startRpc(200, receipt("0x1", "0x5f3a21"));
+
+        Optional<ReceiptInfo> receipt = new Web3jEthereumClient(url, TIMEOUT_SECONDS).getTransactionReceipt(HASH);
+
+        assertEquals(Optional.of(new ReceiptInfo(true, BigInteger.valueOf(0x5f3a21))), receipt);
+        assertTrue(lastRequest.contains("\"eth_getTransactionReceipt\""), lastRequest);
+        assertTrue(lastRequest.contains(HASH), lastRequest);
+    }
+
+    @Test
+    void revertedReceiptReturnsFailure() throws Exception {
+        String url = startRpc(200, receipt("0x0", "0x10"));
+
+        Optional<ReceiptInfo> receipt = new Web3jEthereumClient(url, TIMEOUT_SECONDS).getTransactionReceipt(HASH);
+
+        assertEquals(Optional.of(new ReceiptInfo(false, BigInteger.valueOf(16))), receipt);
+    }
+
+    @Test
+    void nullReceiptIsEmpty() throws Exception {
+        String url = startRpc(200, rawResult("null"));
+
+        Optional<ReceiptInfo> receipt = new Web3jEthereumClient(url, TIMEOUT_SECONDS).getTransactionReceipt(HASH);
+
+        assertSame(Optional.empty(), receipt);
+    }
+
+    @Test
+    void receiptWithoutStatusIsUnavailable() throws Exception {
+        // isStatusOK() do Web3j diria true aqui; o client não pode confirmar sem status.
+        String url = startRpc(200, receipt(null, "0x10"));
+
+        assertThrows(RpcUnavailableException.class,
+                () -> new Web3jEthereumClient(url, TIMEOUT_SECONDS).getTransactionReceipt(HASH));
+    }
+
+    @Test
+    void receiptWithUnknownStatusIsUnavailable() throws Exception {
+        String url = startRpc(200, receipt("0x2", "0x10"));
+
+        assertThrows(RpcUnavailableException.class,
+                () -> new Web3jEthereumClient(url, TIMEOUT_SECONDS).getTransactionReceipt(HASH));
+    }
+
+    @Test
+    void transactionFoundByHashIsKnown() throws Exception {
+        String url = startRpc(200, rawResult("{\"hash\":\"" + HASH + "\",\"nonce\":\"0x7\"}"));
+
+        boolean known = new Web3jEthereumClient(url, TIMEOUT_SECONDS).isTransactionKnown(HASH);
+
+        assertTrue(known);
+        assertTrue(lastRequest.contains("\"eth_getTransactionByHash\""), lastRequest);
+        assertTrue(lastRequest.contains(HASH), lastRequest);
+    }
+
+    @Test
+    void nullTransactionByHashIsUnknown() throws Exception {
+        String url = startRpc(200, rawResult("null"));
+
+        assertFalse(new Web3jEthereumClient(url, TIMEOUT_SECONDS).isTransactionKnown(HASH));
     }
 
     // ---------- sem resposta utilizável: RpcUnavailableException ----------

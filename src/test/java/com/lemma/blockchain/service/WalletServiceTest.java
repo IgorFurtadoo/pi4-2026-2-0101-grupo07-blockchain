@@ -1,6 +1,7 @@
 package com.lemma.blockchain.service;
 
 import com.lemma.blockchain.client.EthereumClient;
+import com.lemma.blockchain.client.ReceiptInfo;
 import com.lemma.blockchain.client.RpcException;
 import com.lemma.blockchain.client.RpcRejectedException;
 import com.lemma.blockchain.client.RpcUnavailableException;
@@ -92,6 +93,16 @@ class WalletServiceTest {
 
         @Override
         public String sendRawTransaction(String signedTransactionHex) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<ReceiptInfo> getTransactionReceipt(String txHash) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean isTransactionKnown(String txHash) {
             throw new UnsupportedOperationException();
         }
     }
