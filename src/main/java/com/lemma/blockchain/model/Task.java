@@ -77,6 +77,39 @@ public class Task {
         this.updatedAt = now;
     }
 
+    // ---------- transições (seção 7.2 do desenho); todas alteram updatedAt ----------
+
+    /**
+     * Transação assinada: grava hash e transação assinada. Continua PENDING.
+     * O worker grava isto no banco antes de enviar (seção 7.3, emenda do CT11).
+     */
+    public void markSigned(String transactionHash, String signedTransaction, Instant now) {
+        this.transactionHash = transactionHash;
+        this.signedTransaction = signedTransaction;
+        this.updatedAt = now;
+    }
+
+    /**
+     * A rede recusou o envio (CT23): FAILED com REJECTED_BY_NETWORK. Apaga hash e
+     * transação assinada, porque a transação nunca chegou a estar na rede.
+     */
+    public void markRejected(Instant now) {
+        this.status = TaskStatus.FAILED;
+        this.failureReason = FailureReason.REJECTED_BY_NETWORK;
+        this.transactionHash = null;
+        this.signedTransaction = null;
+        this.updatedAt = now;
+    }
+
+    /** Falha antes do envio (carteira, chave, nonce ou gás): FAILED com o motivo dado. */
+    public void markFailed(FailureReason reason, Instant now) {
+        this.status = TaskStatus.FAILED;
+        this.failureReason = reason;
+        this.updatedAt = now;
+    }
+
+    // ---------- leitura ----------
+
     public String getTaskId() {
         return taskId;
     }
