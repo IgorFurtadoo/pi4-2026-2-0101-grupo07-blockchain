@@ -9,7 +9,6 @@ import com.lemma.blockchain.repository.WalletRepository;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 /**
@@ -57,12 +56,7 @@ public class TaskService {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ApiException(404, "TASK_NOT_FOUND", "Task não encontrada."));
 
-        return new TaskResponse(
-                task.getTaskId(),
-                task.getStatus(),
-                task.getTransactionHash(),
-                task.getFailureReason(),
-                task.getUpdatedAt().truncatedTo(ChronoUnit.SECONDS).toString());
+        return TaskResponse.from(task);
     }
 
     /**
