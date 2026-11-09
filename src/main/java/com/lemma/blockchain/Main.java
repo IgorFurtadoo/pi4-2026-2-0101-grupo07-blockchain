@@ -1,5 +1,6 @@
 package com.lemma.blockchain;
 
+import com.lemma.blockchain.client.CoreApiClient;
 import com.lemma.blockchain.client.EthereumClient;
 import com.lemma.blockchain.client.Web3jEthereumClient;
 import com.lemma.blockchain.config.AppConfig;
@@ -23,6 +24,7 @@ import org.hibernate.SessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +43,9 @@ public class Main {
 
     /** Quanto o desligamento espera o ciclo em andamento terminar. */
     private static final int WORKER_SHUTDOWN_WAIT_SECONDS = 30;
+
+    /** Tempo máximo de cada chamada do webhook CT15 (conexão e resposta). Sem retentativa (P4). */
+    private static final int WEBHOOK_TIMEOUT_SECONDS = 5;
 
     public static void main(String[] args) {
         AppConfig config;
@@ -71,8 +76,10 @@ public class Main {
         TaskService taskService = new TaskService(taskRepository, walletRepository);
         TransactionController transactionController = new TransactionController(taskService);
         TaskController taskController = new TaskController(taskService);
+        CoreApiClient coreApiClient = new CoreApiClient(config.coreApiWebhookUrl(), config.serviceKey(),
+                Duration.ofSeconds(WEBHOOK_TIMEOUT_SECONDS));
         TaskWorker taskWorker = new TaskWorker(taskRepository, walletRepository, keyCipher,
-                ethereumClient, config.chainId());
+                ethereumClient, coreApiClient, config.chainId());
 
         Javalin app = Javalin.create(javalin -> {
             javalin.jsonMapper(JsonConfig.jsonMapper());

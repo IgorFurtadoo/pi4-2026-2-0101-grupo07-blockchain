@@ -1,5 +1,6 @@
 package com.lemma.blockchain.service;
 
+import com.lemma.blockchain.client.CoreApiClient;
 import com.lemma.blockchain.client.EthereumClient;
 import com.lemma.blockchain.client.ReceiptInfo;
 import com.lemma.blockchain.client.RpcException;
@@ -25,6 +26,7 @@ import org.web3j.utils.Numeric;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -44,12 +46,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Testa a Fase B do worker sem banco e sem rede, chamando runCycle() direto.
+ * Testa as fases A e B do worker sem banco e sem rede, chamando runCycle() direto.
  *
  * Mesmo padrão do TaskServiceTest e do WalletServiceTest: os repositories são
  * subclasses com super(null) que guardam tudo em memória. O de task guarda um
- * retrato do estado a cada save/update, como o banco: assim o teste de ordem
- * confere o que foi gravado, e não o objeto alterado em memória.
+ * retrato do estado a cada save/update, como o banco: assim os testes de ordem
+ * conferem o que foi gravado, e não o objeto alterado em memória. O webhook é
+ * uma subclasse do CoreApiClient que só registra, sem HTTP.
  */
 class TaskWorkerTest {
 
@@ -103,6 +106,15 @@ class TaskWorkerTest {
         }
 
         @Override
+        public List<Task> findPendingWithHash() {
+            return tasks.values().stream()
+                    .filter(task -> stored.get(task.getTaskId()).status() == TaskStatus.PENDING)
+                    .filter(task -> stored.get(task.getTaskId()).transactionHash() != null)
+                    .sorted(Comparator.comparing(Task::getCreatedAt))
+                    .toList();
+        }
+
+        @Override
         public boolean existsPendingWithHashFrom(String sourceAddress) {
             return tasks.values().stream()
                     .filter(task -> task.getSourceAddress().equals(sourceAddress))
@@ -147,6 +159,8 @@ class TaskWorkerTest {
     /**
      * RPC falso. No envio, guarda o hex recebido e o retrato da task gravado
      * naquele instante (para o teste de ordem), e então responde ou falha.
+     * Recibos, hashes conhecidos e falhas da Fase A são configurados por hash;
+     * falhas de reenvio, pela transação assinada.
      */
     private static class FakeEthereumClient implements EthereumClient {
         private final InMemoryTaskRepository taskRepository;
@@ -157,6 +171,15 @@ class TaskWorkerTest {
         String nodeHash;
         final List<String> sent = new ArrayList<>();
         final List<Stored> storedAtSend = new ArrayList<>();
+        final Map<String, RpcException> sendFailures = new HashMap<>();
+
+        final Map<String, ReceiptInfo> receipts = new HashMap<>();
+        final Map<String, RpcException> receiptFailures = new HashMap<>();
+        final List<String> receiptQueries = new ArrayList<>();
+
+        final Set<String> knownHashes = new HashSet<>();
+        final Map<String, RpcException> knownFailures = new HashMap<>();
+        final List<String> knownQueries = new ArrayList<>();
 
         FakeEthereumClient(InMemoryTaskRepository taskRepository) {
             this.taskRepository = taskRepository;
@@ -187,6 +210,9 @@ class TaskWorkerTest {
         public String sendRawTransaction(String signedTransactionHex) throws RpcException {
             sent.add(signedTransactionHex);
             storedAtSend.add(taskRepository.storedWithSignedTransaction(signedTransactionHex));
+            if (sendFailures.containsKey(signedTransactionHex)) {
+                throw sendFailures.get(signedTransactionHex);
+            }
             if (sendFailure != null) {
                 throw sendFailure;
             }
@@ -194,13 +220,47 @@ class TaskWorkerTest {
         }
 
         @Override
-        public Optional<ReceiptInfo> getTransactionReceipt(String txHash) {
-            throw new UnsupportedOperationException();
+        public Optional<ReceiptInfo> getTransactionReceipt(String txHash) throws RpcException {
+            receiptQueries.add(txHash);
+            if (receiptFailures.containsKey(txHash)) {
+                throw receiptFailures.get(txHash);
+            }
+            return Optional.ofNullable(receipts.get(txHash));
         }
 
         @Override
-        public boolean isTransactionKnown(String txHash) {
-            throw new UnsupportedOperationException();
+        public boolean isTransactionKnown(String txHash) throws RpcException {
+            knownQueries.add(txHash);
+            if (knownFailures.containsKey(txHash)) {
+                throw knownFailures.get(txHash);
+            }
+            return knownHashes.contains(txHash);
+        }
+    }
+
+    /**
+     * Webhook falso: em cada aviso, guarda o retrato da task gravado naquele
+     * instante (para conferir que o estado final já estava no banco) e, se
+     * configurado, lança a falha.
+     */
+    private static class RecordingCoreApiClient extends CoreApiClient {
+        private final InMemoryTaskRepository taskRepository;
+        final List<String> notifiedTaskIds = new ArrayList<>();
+        final List<Stored> storedAtNotify = new ArrayList<>();
+        RuntimeException failure;
+
+        RecordingCoreApiClient(InMemoryTaskRepository taskRepository) {
+            super("http://127.0.0.1:1/webhooks/tasks", "chave-de-teste", Duration.ofSeconds(1));
+            this.taskRepository = taskRepository;
+        }
+
+        @Override
+        public void notifyTaskCompleted(Task task) {
+            notifiedTaskIds.add(task.getTaskId());
+            storedAtNotify.add(taskRepository.stored.get(task.getTaskId()));
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 
@@ -208,8 +268,9 @@ class TaskWorkerTest {
     private final InMemoryWalletRepository walletRepository = new InMemoryWalletRepository();
     private final KeyCipher keyCipher = new KeyCipher(randomBytes(32));
     private final FakeEthereumClient ethereumClient = new FakeEthereumClient(taskRepository);
+    private final RecordingCoreApiClient coreApiClient = new RecordingCoreApiClient(taskRepository);
     private final TaskWorker worker =
-            new TaskWorker(taskRepository, walletRepository, keyCipher, ethereumClient, CHAIN_ID);
+            new TaskWorker(taskRepository, walletRepository, keyCipher, ethereumClient, coreApiClient, CHAIN_ID);
 
     private int tasksCreated = 0;
 
@@ -256,8 +317,30 @@ class TaskWorkerTest {
         return task;
     }
 
+    /**
+     * Task já assinada pela Fase B: PENDING com hash e transação assinada gravados.
+     * O hex é fictício (a Fase A não o decodifica), mas o hash é o dele.
+     */
+    private Task storeSentTask(String source) {
+        Task task = storeTask(source);
+        String signedHex = String.format("0xf86c07%02x", tasksCreated);
+        task.markSigned(hashOf(signedHex), signedHex, task.getCreatedAt());
+        taskRepository.update(task);
+        return task;
+    }
+
     private Stored stored(Task task) {
         return taskRepository.stored.get(task.getTaskId());
+    }
+
+    /** A task foi avisada uma única vez, e o aviso viu este estado já gravado. */
+    private void assertNotifiedOnce(Task task) {
+        assertEquals(List.of(task.getTaskId()), coreApiClient.notifiedTaskIds);
+        assertEquals(stored(task), coreApiClient.storedAtNotify.get(0), "aviso deve sair depois de gravar");
+    }
+
+    private void assertNoNotification() {
+        assertTrue(coreApiClient.notifiedTaskIds.isEmpty(), "nenhum aviso esperado");
     }
 
     private void assertFailedWithoutSending(Task task, FailureReason reason) {
@@ -268,6 +351,7 @@ class TaskWorkerTest {
         assertNull(s.signedTransaction());
         assertTrue(s.updatedAt().isAfter(task.getCreatedAt()), "updatedAt deve mudar");
         assertTrue(ethereumClient.sent.isEmpty(), "nada pode ser enviado");
+        assertNotifiedOnce(task);
     }
 
     // ---------- caminho feliz ----------
@@ -298,6 +382,7 @@ class TaskWorkerTest {
         assertEquals(hashOf(hex), s.transactionHash());
         assertEquals(hex, s.signedTransaction());
         assertNull(s.failureReason());
+        assertNoNotification();
     }
 
     @Test
@@ -331,6 +416,7 @@ class TaskWorkerTest {
         assertEquals(FailureReason.REJECTED_BY_NETWORK, s.failureReason());
         assertNull(s.transactionHash());
         assertNull(s.signedTransaction());
+        assertNotifiedOnce(task); // o aviso sai sem hash
     }
 
     @Test
@@ -346,6 +432,7 @@ class TaskWorkerTest {
         assertNull(s.failureReason());
         assertEquals(hashOf(hex), s.transactionHash());
         assertEquals(hex, s.signedTransaction());
+        assertNoNotification();
     }
 
     @Test
@@ -418,7 +505,10 @@ class TaskWorkerTest {
         Task second = storeTask(source);
 
         worker.runCycle();
-        worker.runCycle(); // a primeira continua PENDING com hash: a segunda segue esperando
+        // Segundo ciclo: a primeira está na rede, sem recibo; continua PENDING com hash
+        // e a segunda segue esperando.
+        ethereumClient.knownHashes.add(stored(first).transactionHash());
+        worker.runCycle();
 
         assertEquals(1, ethereumClient.sent.size());
         assertNotNull(stored(first).transactionHash());
@@ -451,5 +541,293 @@ class TaskWorkerTest {
         assertEquals(brokenBefore, stored(broken), "estado mantido: PENDING sem hash, para o próximo ciclo");
         assertEquals(1, ethereumClient.sent.size());
         assertNotNull(stored(healthy).transactionHash());
+    }
+
+    // ---------- Fase A: recibo ----------
+
+    @Test
+    void successfulReceiptConfirmsKeepsHashAndNotifies() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.receipts.put(before.transactionHash(), new ReceiptInfo(true, BigInteger.valueOf(100)));
+
+        worker.runCycle();
+
+        Stored s = stored(task);
+        assertEquals(TaskStatus.CONFIRMED, s.status());
+        assertNull(s.failureReason());
+        assertEquals(before.transactionHash(), s.transactionHash());
+        assertEquals(before.signedTransaction(), s.signedTransaction());
+        assertTrue(s.updatedAt().isAfter(before.updatedAt()), "updatedAt deve mudar");
+        assertNotifiedOnce(task);
+        assertEquals(TaskStatus.CONFIRMED, coreApiClient.storedAtNotify.get(0).status());
+        assertTrue(ethereumClient.sent.isEmpty(), "com recibo, nada é reenviado");
+        assertTrue(ethereumClient.knownQueries.isEmpty(), "com recibo, não consulta o hash");
+    }
+
+    @Test
+    void revertedReceiptFailsWithTransactionRevertedKeepingHash() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.receipts.put(before.transactionHash(), new ReceiptInfo(false, BigInteger.valueOf(100)));
+
+        worker.runCycle();
+
+        Stored s = stored(task);
+        assertEquals(TaskStatus.FAILED, s.status());
+        assertEquals(FailureReason.TRANSACTION_REVERTED, s.failureReason());
+        assertEquals(before.transactionHash(), s.transactionHash());
+        assertTrue(s.updatedAt().isAfter(before.updatedAt()), "updatedAt deve mudar");
+        assertNotifiedOnce(task);
+    }
+
+    @Test
+    void notificationSeesTheFinalStateAlreadyStored() {
+        Task task = storeSentTask(storeWallet());
+        ethereumClient.receipts.put(stored(task).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        Stored atNotify = coreApiClient.storedAtNotify.get(0);
+        assertEquals(TaskStatus.CONFIRMED, atNotify.status(), "o aviso só sai depois de gravar o estado final");
+        assertEquals(stored(task), atNotify);
+    }
+
+    // ---------- Fase A: sem recibo ----------
+
+    @Test
+    void knownTransactionWithoutReceiptChangesNothing() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.knownHashes.add(before.transactionHash());
+
+        worker.runCycle();
+
+        assertEquals(before, stored(task));
+        assertEquals(List.of(before.transactionHash()), ethereumClient.knownQueries);
+        assertTrue(ethereumClient.sent.isEmpty(), "a rede conhece: nada é reenviado");
+        assertNoNotification();
+    }
+
+    @Test
+    void unknownTransactionIsResentOnceWithTheSameSignedHex() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+
+        worker.runCycle();
+
+        assertEquals(List.of(before.signedTransaction()), ethereumClient.sent, "reenvia a MESMA transação, uma vez");
+        assertEquals(before, stored(task), "continua PENDING com hash e transação assinada");
+        assertNoNotification();
+    }
+
+    @Test
+    void resendAnsweredAlreadyKnownKeepsPending() {
+        assertResendErrorKeepsPending("already known");
+    }
+
+    @Test
+    void resendAnsweredNonceTooLowKeepsPending() {
+        assertResendErrorKeepsPending("nonce too low: next nonce 8, tx nonce 7");
+    }
+
+    @Test
+    void resendAnsweredKnownTransactionKeepsPending() {
+        assertResendErrorKeepsPending("Known transaction: 5c504ed4");
+    }
+
+    /** O nó diz que a transação já está ou esteve na rede: nada muda, nada é avisado. */
+    private void assertResendErrorKeepsPending(String nodeMessage) {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.sendFailures.put(before.signedTransaction(), new RpcRejectedException(-32000, nodeMessage));
+
+        worker.runCycle();
+
+        assertEquals(1, ethereumClient.sent.size());
+        assertEquals(before, stored(task), "PENDING, hash e transação assinada intactos");
+        assertNoNotification();
+    }
+
+    @Test
+    void resendRejectedForOtherReasonFailsErasesHashAndNotifies() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.sendFailures.put(before.signedTransaction(),
+                new RpcRejectedException(-32000, "insufficient funds for gas * price + value"));
+
+        worker.runCycle();
+
+        Stored s = stored(task);
+        assertEquals(TaskStatus.FAILED, s.status());
+        assertEquals(FailureReason.REJECTED_BY_NETWORK, s.failureReason());
+        assertNull(s.transactionHash());
+        assertNull(s.signedTransaction());
+        assertNotifiedOnce(task);
+        assertNull(coreApiClient.storedAtNotify.get(0).transactionHash(), "o aviso sai sem hash");
+    }
+
+    @Test
+    void unknownTransactionWithoutSignedHexOnlyLogs() {
+        Task task = storeTask(storeWallet());
+        task.markSigned("0x" + "cd".repeat(32), null, task.getCreatedAt());
+        taskRepository.update(task);
+        Stored before = stored(task);
+
+        worker.runCycle();
+
+        assertEquals(before, stored(task));
+        assertTrue(ethereumClient.sent.isEmpty());
+        assertNoNotification();
+    }
+
+    // ---------- Fase A: falhas de RPC ----------
+
+    @Test
+    void rpcFailureOnReceiptKeepsPendingAndNextTaskContinues() {
+        Task failing = storeSentTask(storeWallet());
+        Task healthy = storeSentTask(storeWallet());
+        Stored before = stored(failing);
+        ethereumClient.receiptFailures.put(before.transactionHash(), new RpcUnavailableException("falha simulada"));
+        ethereumClient.receipts.put(stored(healthy).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        assertEquals(before, stored(failing));
+        assertTrue(ethereumClient.knownQueries.isEmpty(), "sem recibo legível, não segue para a consulta");
+        assertEquals(TaskStatus.CONFIRMED, stored(healthy).status());
+        assertNotifiedOnce(healthy);
+    }
+
+    @Test
+    void jsonRpcErrorOnReceiptKeepsPending() {
+        Task task = storeSentTask(storeWallet());
+        Stored before = stored(task);
+        ethereumClient.receiptFailures.put(before.transactionHash(), new RpcRejectedException(-32603, "internal error"));
+
+        worker.runCycle();
+
+        assertEquals(before, stored(task));
+        assertTrue(ethereumClient.sent.isEmpty());
+        assertNoNotification();
+    }
+
+    @Test
+    void rpcFailureOnHashQueryKeepsPendingAndNextTaskContinues() {
+        Task failing = storeSentTask(storeWallet());
+        Task healthy = storeSentTask(storeWallet());
+        Stored before = stored(failing);
+        ethereumClient.knownFailures.put(before.transactionHash(), new RpcUnavailableException("falha simulada"));
+        ethereumClient.receipts.put(stored(healthy).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        assertEquals(before, stored(failing));
+        assertTrue(ethereumClient.sent.isEmpty(), "sem saber se a rede conhece, não reenvia");
+        assertEquals(TaskStatus.CONFIRMED, stored(healthy).status());
+        assertNotifiedOnce(healthy);
+    }
+
+    @Test
+    void rpcFailureOnResendKeepsPendingAndNextTaskContinues() {
+        Task failing = storeSentTask(storeWallet());
+        Task healthy = storeSentTask(storeWallet());
+        Stored before = stored(failing);
+        ethereumClient.sendFailures.put(before.signedTransaction(), new RpcUnavailableException("falha simulada"));
+        ethereumClient.receipts.put(stored(healthy).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        assertEquals(before, stored(failing));
+        assertEquals(List.of(before.signedTransaction()), ethereumClient.sent);
+        assertEquals(TaskStatus.CONFIRMED, stored(healthy).status());
+        assertNotifiedOnce(healthy);
+    }
+
+    // ---------- Fase A e Fase B no mesmo ciclo ----------
+
+    @Test
+    void confirmationInPhaseAFreesTheWalletForPhaseBInTheSameCycle() {
+        String source = storeWallet();
+        Task first = storeSentTask(source);
+        Task second = storeTask(source);
+        ethereumClient.receipts.put(stored(first).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        assertEquals(TaskStatus.CONFIRMED, stored(first).status());
+        assertEquals(1, ethereumClient.sent.size(), "a segunda é enviada no mesmo ciclo");
+        assertEquals(hashOf(ethereumClient.sent.get(0)), stored(second).transactionHash());
+        assertEquals(TaskStatus.PENDING, stored(second).status());
+    }
+
+    @Test
+    void phaseADoesNotTouchTasksWithoutHashNorFinishedOnes() {
+        String source = storeWallet();
+        Task notSent = storeTask(source);
+        Task alreadyFailed = storeTask(storeWallet());
+        alreadyFailed.markFailed(FailureReason.INTERNAL_ERROR, alreadyFailed.getCreatedAt());
+        taskRepository.update(alreadyFailed);
+        Stored failedBefore = stored(alreadyFailed);
+
+        worker.runCycle();
+
+        assertTrue(ethereumClient.receiptQueries.isEmpty(), "Fase A só acompanha tasks PENDING com hash");
+        assertTrue(ethereumClient.knownQueries.isEmpty());
+        assertNotNull(stored(notSent).transactionHash(), "a Fase B assinou e enviou a task sem hash");
+        assertEquals(failedBefore, stored(alreadyFailed));
+        assertNoNotification();
+    }
+
+    @Test
+    void phaseBFailureByNonceAlsoNotifies() {
+        Task task = storeTask(storeWallet());
+        ethereumClient.nonceFailure = new RpcUnavailableException("falha simulada");
+
+        worker.runCycle();
+
+        assertNotifiedOnce(task);
+        assertEquals(FailureReason.INTERNAL_ERROR, coreApiClient.storedAtNotify.get(0).failureReason());
+    }
+
+    @Test
+    void phaseBRejectionAlsoNotifiesWithoutHash() {
+        Task task = storeTask(storeWallet());
+        ethereumClient.sendFailure = new RpcRejectedException(-32000, "insufficient funds for gas * price + value");
+
+        worker.runCycle();
+
+        assertNotifiedOnce(task);
+        Stored atNotify = coreApiClient.storedAtNotify.get(0);
+        assertEquals(FailureReason.REJECTED_BY_NETWORK, atNotify.failureReason());
+        assertNull(atNotify.transactionHash());
+    }
+
+    @Test
+    void notificationFailureKeepsStateAndNextTaskContinues() {
+        Task first = storeSentTask(storeWallet());
+        Task second = storeSentTask(storeWallet());
+        ethereumClient.receipts.put(stored(first).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+        ethereumClient.receipts.put(stored(second).transactionHash(), new ReceiptInfo(false, BigInteger.ONE));
+        coreApiClient.failure = new RuntimeException("falha simulada no aviso");
+
+        worker.runCycle();
+
+        assertEquals(TaskStatus.CONFIRMED, stored(first).status(), "estado final gravado antes do aviso");
+        assertEquals(TaskStatus.FAILED, stored(second).status());
+        assertEquals(FailureReason.TRANSACTION_REVERTED, stored(second).failureReason());
+        assertEquals(List.of(first.getTaskId(), second.getTaskId()), coreApiClient.notifiedTaskIds);
+    }
+
+    @Test
+    void finishedTaskIsNotTrackedAgain() {
+        Task task = storeSentTask(storeWallet());
+        ethereumClient.receipts.put(stored(task).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+        worker.runCycle();
+
+        assertEquals(1, ethereumClient.receiptQueries.size());
+        assertNotifiedOnce(task);
     }
 }
