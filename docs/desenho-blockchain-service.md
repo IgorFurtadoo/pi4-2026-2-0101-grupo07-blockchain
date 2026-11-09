@@ -101,15 +101,16 @@ blockchain/
   repository/
     WalletRepository.java      save, findByAddress
     TaskRepository.java        save, findById, update, findPendingWithoutHash,
-                               existsPendingWithHashFrom (passo 7: findPendingWithHash)
+                               findPendingWithHash, existsPendingWithHashFrom
   model/
     Wallet.java, Task.java     entidades Hibernate
     TaskStatus.java, FailureReason.java   enums
   client/
     EthereumClient.java        interface do RPC: getBalance, getTransactionCount, getGasPrice,
-                               sendRawTransaction (passo 7: getReceipt, getTransactionByHash)
+                               sendRawTransaction, getTransactionReceipt, isTransactionKnown
+    ReceiptInfo.java           record do recibo: success (0x1/0x0), blockNumber
     Web3jEthereumClient.java
-    CoreApiClient.java         webhook (CT15)
+    CoreApiClient.java         webhook (CT15): notifyTaskCompleted(Task), classe concreta
   crypto/KeyCipher.java        AES-GCM
   exception/ApiException.java  status HTTP + code do erro
 ```
@@ -216,9 +217,18 @@ Regra: `transaction_hash` fica preenchido só enquanto a transação pode estar 
  
 ### 7.3 Ciclo do worker
  
-**Fase A: acompanhar** (tasks `PENDING` com hash):
-1. Pedir o recibo (CT16). Se existir: `status 0x1` → `CONFIRMED`; `0x0` → `FAILED` com `TRANSACTION_REVERTED`. Gravar e notificar (7.5).
-2. Se não houver recibo: perguntar à rede se ela conhece o hash (`eth_getTransactionByHash`). Se **não** conhece e há `signed_transaction`, reenviar a transação já assinada. Reenviar a mesma transação é seguro: o hash e o nonce são os mesmos. Se o reenvio for recusado pela rede, tratar como no passo 5 da Fase B.
+A Fase A roda **antes** da Fase B no mesmo ciclo: uma task confirmada libera a carteira para a Fase B do mesmo ciclo. Cada fase tem o seu `try/catch` dentro de `runCycle()`, para a falha de uma não pular a outra, e cada task tem o seu, para a falha de uma não parar as outras. [Aplicado no H08.1]
+ 
+**Fase A: acompanhar** (tasks `PENDING` com hash, mais antigas primeiro, `findPendingWithHash`):
+1. Pedir o recibo (CT16, `getTransactionReceipt`). Se existir: `status 0x1` → `CONFIRMED`; `0x0` → `FAILED` com `TRANSACTION_REVERTED` (hash mantido). Gravar e notificar (7.5).
+2. Se não houver recibo: perguntar à rede se ela conhece o hash (CT24, `isTransactionKnown`, que usa `eth_getTransactionByHash`). Se conhece, não fazer nada.
+3. Se **não** conhece e há `signed_transaction`, reenviar a transação já assinada (CT23). Reenviar a mesma transação é seguro: o hash e o nonce são os mesmos. Resposta do reenvio:
+   - sucesso: continua `PENDING`;
+   - falha de conexão ou timeout: continua `PENDING`;
+   - erro JSON-RPC cuja mensagem (em minúsculo) contém "already known", "known transaction" ou "nonce too low": a transação já está ou já esteve na rede. Continua `PENDING`, com aviso no log, e **nunca** vira `REJECTED_BY_NETWORK` (o recibo aparece num ciclo seguinte);
+   - qualquer outro erro JSON-RPC: como no passo 5 da Fase B (`FAILED`/`REJECTED_BY_NETWORK`, hash e transação assinada apagados, notificar sem hash).
+4. Falha de RPC (sem resposta ou erro JSON-RPC) no recibo ou na consulta por hash: a task continua `PENDING`, log, e o ciclo segue para a próxima.
+5. Sem `signed_transaction` e a rede não conhece o hash: só aviso no log.
 **Fase B: enviar** (tasks `PENDING` sem hash), só para carteiras que **não** têm task em acompanhamento (uma task por carteira de cada vez):
 1. Ler a chave da carteira (CT5) e decifrar na memória.
 2. Obter nonce (CT21) e preço do gás (CT22).
@@ -226,6 +236,7 @@ Regra: `transaction_hash` fica preenchido só enquanto a transação pode estar 
 4. **Gravar `transaction_hash` e `signed_transaction` na task, em transação de banco, antes de enviar.**
 5. Enviar (CT23).
    - Erro de JSON-RPC (saldo insuficiente, nonce inválido, gás insuficiente): **apagar** `transaction_hash` e `signed_transaction`, marcar `FAILED` com `REJECTED_BY_NETWORK` e notificar sem hash.
+   - Falha antes do envio (carteira, chave, nonce, gás): `FAILED`/`INTERNAL_ERROR` e notificar sem hash.
    - Falha de conexão ou timeout: não muda nada; a Fase A reenvia no próximo ciclo.
 Por que gravar antes de enviar: se o processo cair entre o passo 4 e o 5, ou o envio der timeout sem sabermos se chegou, a Fase A resolve. Ela encontra a task com hash, sem recibo, e checa a rede. É a resposta para a pendência "como detectar, pela rede, uma task enviada sem hash gravado" da H01.1: **o hash nunca fica sem gravar**, então a pergunta deixa de existir.
  
@@ -246,30 +257,40 @@ sequenceDiagram
     API-->>CORE: 202 taskId
  
     loop a cada WORKER_INTERVAL
-        W->>DB: lê tasks PENDING
-        Note over W: Fase B (carteira sem task em voo)
-        W->>DB: lê chave cifrada (CT5)
-        W->>RPC: CT21 nonce, CT22 gás
-        W->>W: assina, calcula hash
-        W->>DB: grava hash + transação assinada
-        W->>RPC: CT23 eth_sendRawTransaction
-        Note over W: Fase A (task com hash)
+        Note over W: Fase A (tasks PENDING com hash)
+        W->>DB: lê tasks PENDING com hash
         W->>RPC: CT16 recibo
         alt recibo presente
             W->>DB: CONFIRMED ou FAILED
             W->>CORE: CT15 webhook
         else sem recibo
-            W->>RPC: eth_getTransactionByHash
+            W->>RPC: CT24 eth_getTransactionByHash
             opt rede não conhece o hash
-                W->>RPC: reenvia transação assinada
+                W->>RPC: CT23 reenvia a mesma transação assinada
             end
+        end
+        Note over W: Fase B (tasks PENDING sem hash, carteira sem task em voo)
+        W->>DB: lê tasks PENDING sem hash
+        W->>DB: lê chave cifrada (CT5)
+        W->>RPC: CT21 nonce, CT22 gás
+        W->>W: assina, calcula hash
+        W->>DB: grava hash + transação assinada
+        W->>RPC: CT23 eth_sendRawTransaction
+        opt rede recusou, ou falha antes do envio
+            W->>DB: FAILED
+            W->>CORE: CT15 webhook
         end
     end
 ```
  
 ### 7.5 Webhook (CT15)
  
-Depois de gravar o estado final, o worker chama `CoreApiClient`, que faz `POST` ao Core API com `X-Service-Key` e o corpo do CT15 (`taskId`, `status`, `transactionHash`, `failureReason`, `updatedAt`). Se falhar: registrar em log e seguir, sem retentativa. [Aplicado no H08.1, P4 em aberto.] O Core API recupera pelo CT14.
+Depois de gravar o estado final, e fora de qualquer transação de banco, o worker chama `CoreApiClient.notifyTaskCompleted(task)`, que faz `POST` em `CORE_API_WEBHOOK_URL` com `X-Service-Key` (a mesma `SERVICE_KEY`, P2), `Content-Type: application/json` e o corpo do CT15 (`taskId`, `status`, `transactionHash` e `failureReason` quando existirem, `updatedAt`; o mesmo `TaskResponse` do CT14). [Aplicado no H08.1, P4 em aberto.]
+ 
+- **Quando:** em **toda** transição para estado final: `CONFIRMED` e `FAILED`/`TRANSACTION_REVERTED` (Fase A), `FAILED`/`REJECTED_BY_NETWORK` (Fase B e reenvio da Fase A) e `FAILED`/`INTERNAL_ERROR` (Fase B). Tasks que ficaram `FAILED` antes do H08.1 não são notificadas.
+- **Resposta:** qualquer 2xx é sucesso; 404 `TRANSACTION_NOT_FOUND` vai ao log como informação (corrida abaixo); outro status, aviso.
+- **Falha:** tempo limite fixo de 5 s (`WEBHOOK_TIMEOUT_SECONDS` no `Main`). Sem retentativa: falha só vai ao log (uma linha, sem stack trace), e o Core API recupera pelo CT14. `notifyTaskCompleted` nunca lança.
+- **Log:** só `taskId`, estado e status HTTP; a URL e a `X-Service-Key` nunca aparecem, e das exceções só o nome da classe (a mensagem pode trazer o host).
  
 Corrida conhecida: o aviso pode chegar antes de o Core API gravar a `eth_transaction` (404 `TRANSACTION_NOT_FOUND`). Já está coberto pelo CT14.
  
@@ -288,8 +309,8 @@ Usado dentro de `Web3jEthereumClient` (e do `WalletService` para gerar o par de 
 | Assinar | `TransactionEncoder.signMessage(raw, chainId, credentials)` |
 | Hash local | `Numeric.toHexString(Hash.sha3(signedBytes))` |
 | Enviar | `ethSendRawTransaction(hex)`; checar `hasError()` |
-| Recibo | `ethGetTransactionReceipt(hash)`; `Optional<TransactionReceipt>`, `isStatusOK()` |
-| Conhecida na rede? | `ethGetTransactionByHash(hash)` |
+| Recibo | `ethGetTransactionReceipt(hash)`; `Optional<TransactionReceipt>`, `getStatus()` validado à mão (`0x1`/`0x0`); **não** usar `isStatusOK()` (decisão 8 da seção 12) |
+| Conhecida na rede? | `ethGetTransactionByHash(hash)`; `getTransaction().isPresent()` |
  
 Valor em wei: `Convert.toWei(amountEth, Unit.ETHER).toBigIntegerExact()`. O `Exact` falha se houver mais de 18 casas, o que reforça a validação da seção 6.
  
@@ -344,7 +365,10 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 | Mudança | Contrato | Por que |
 |---|---|---|
 | Coluna interna `signed_transaction` em `task`; `transaction_hash` passa a ser gravado antes do envio (e apagado se a rede recusar) | Emendar CT11 | Permite reenviar a mesma transação com segurança e retomar após queda. **Aplicada no H07.1 (CT11 e CT14 emendados).** |
-| Chamada `eth_getTransactionByHash` | Novo contrato (CT24) | Distinguir "rede não conhece o hash" de "ainda sem recibo" |
+| Chamada `eth_getTransactionByHash` | Novo contrato (CT24) | Distinguir "rede não conhece o hash" de "ainda sem recibo". **Aplicada no H08.1, decidida pelo responsável do módulo (Igor): CT24 criado.** O contrato só liga este serviço ao Provedor RPC, sem consumidor em outro módulo |
+| Webhook em toda transição final, sem retentativa | Emendar CT15 | O CT15 diz quando o aviso sai só pelos fluxos E5/E9; a emenda deixa explícito que sai também nos `FAILED` sem hash, depois de gravar, sem retentativa. **Aplicada no H08.1, decidida pelo responsável do módulo (Igor): CT15 emendado.** Muda só o momento do envio; a Core API hoje também é do Igor |
+| Recibo ilegível e erro JSON-RPC no recibo | Nota no CT16 | Status fora de `0x1`/`0x0` nunca confirma; erro mantém `PENDING`. **Aplicada no H08.1, decidida pelo responsável do módulo (Igor).** |
+| Respostas ao reenvio da Fase A | Nota no CT23 | Família "already known" mantém `PENDING`; outros erros viram `REJECTED_BY_NETWORK`. **Aplicada no H08.1, decidida pelo responsável do módulo (Igor).** |
 | Falha de conexão no envio (CT23) | CT23 diz FAILED/INTERNAL_ERROR; este desenho mantém PENDING e tenta de novo | Evita marcar FAILED uma transação que pode ter chegado à rede. **Aplicada no H07.1 (CT23 emendado).** |
 | Limite de gás fixo de 500.000 | P8 e o passo 8 do fluxo E8 dizem 21000 | Com o Glamsterdam (EIP-8037) na Sepolia, 21000 não basta para enviar a conta nova (decisão 7 abaixo). **Aplicada no H07.1; a Especificação ainda não foi emendada.** |
  
@@ -382,6 +406,20 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
      - **Consequência:** antes de aceitar a transação, a rede exige saldo para o valor mais 500.000 × preço do gás. Com o preço da Sepolia hoje (centenas de wei), a diferença é desprezível.
      - **Limitação conhecida:** se o custo da rede subir além de 500.000, a transação reverte e o passo 7 marca `FAILED`/`TRANSACTION_REVERTED`; o usuário perde só a taxa.
      - **Alternativa futura:** `eth_estimateGas` com margem, emendando a P8 e criando o contrato da chamada.
+- Worker de acompanhamento, Fase A, e webhook (seções 7.3 e 7.5). Decidido pelo responsável do módulo (Igor), no H08.1, em 09/11:
+  8. **Fase A e webhook.**
+     - **Ordem e isolamento:** Fase A antes da Fase B; cada fase e cada task com o seu `try/catch`. Exceção inesperada (inclusive do webhook) só vai ao log; o estado gravado fica como estava.
+     - **Recibo ilegível nunca confirma.** O `TransactionReceipt.isStatusOK()` do Web3j 6.1.0 devolve `true` quando o `status` é nulo (conferido no bytecode). Por isso o `Web3jEthereumClient` lê `getStatus()`: `0x1` é sucesso, `0x0` é revertido, e qualquer outro valor (ou ausente, ou `blockNumber` ilegível) vira `RpcUnavailableException`, mantendo a task `PENDING`.
+     - **Família "already known":** no reenvio, erro JSON-RPC com "already known", "known transaction" ou "nonce too low" mantém `PENDING`; só os demais erros viram `REJECTED_BY_NETWORK`.
+     - **Webhook só em log:** sem retentativa (P4 em aberto), tempo limite de 5 s, falha vira uma linha de aviso.
+     - **Contratos:** CT24 criado; CT15 emendado; notas no CT16 e no CT23. Todos decididos pelo responsável do módulo (Igor), no H08.1.
+     - **Chamadas RPC por ciclo**, com uma task acompanhada: 1 com recibo; 2 enquanto espera no mempool (recibo + CT24); 3 se a rede não a conhece (mais o reenvio). A Fase B soma 3 por task enviada (nonce, gás, envio).
+     - **Limitações conhecidas:**
+       1. A heurística de mensagens vale para nós tipo geth. Um nó que diga "já conhecida" com outra frase faria a Fase A marcar `REJECTED_BY_NETWORK` numa transação que ainda pode minerar (reenvio mal classificado). Nesse caso a task mostraria `FAILED` sem hash, e a transação poderia aparecer depois no explorador.
+       2. "nonce too low" com o hash desconhecido pela rede: se outra transação consumiu o nonce da carteira, ou a transação foi descartada, a task fica `PENDING` para sempre e gera 1 aviso por ciclo. Não há tempo limite de task neste passo (item 1 de "Em aberto").
+       3. O aviso é síncrono, na thread do worker: cada task final custa até 5 s se o webhook estiver fora, e o ciclo seguinte espera por isso. Aceito para o volume do projeto.
+       4. Queda do processo entre gravar o estado final e enviar o webhook perde o aviso. Não há retentativa (P4); a Core API recupera pelo CT14. O passo 8 (E9) deve citar isso.
+       5. Um nó público atrás de balanceador pode dizer "desconhecida" para uma transação enviada há pouco. O reenvio é idempotente, e o pior caso é um "already known", tratado como `PENDING`.
 ## 13. Ordem de implementação e critério de pronto
  
 | # | Passo | Classes principais | Cards | Pronto quando |
@@ -393,6 +431,6 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 | 5 | Pedido de envio e consulta de task | `Task`, `TaskRepository`, `TaskService`, `TransactionController`, `TaskController` | H05.1 | `POST /transactions` grava `PENDING` e responde 202; `GET /tasks/{id}` lê |
 | 6 | Worker: Fase B (assinar, gravar, enviar) | `TaskWorker`, `Web3jEthereumClient` (nonce, gás, envio) | H07.1 | Transação real aparece no Etherscan |
 | 7 | Worker: Fase A (recibo) e webhook | `TaskWorker`, `CoreApiClient` | H08.1 | Task chega a `CONFIRMED`; receptor falso recebe o CT15 |
-| 8 | Retomada após reinício | `TaskWorker` (reenvio por `getTransactionByHash`) | H09.1 | Reiniciar o container no meio termina a task; testes de queda do item 2 da seção 11 passam |
+| 8 | Retomada após reinício: testes de queda e documentação do E9 | `TaskWorker` (o reenvio por `isTransactionKnown` já existe desde o passo 7) | H09.1 | Reiniciar o container no meio termina a task; testes de queda do item 2 da seção 11 passam |
  
 Efeito no backlog: com este desenho, o H09.1 encolhe, porque a Fase A já faz a retomada. Ele vira essencialmente os testes de queda e a documentação do E9.
