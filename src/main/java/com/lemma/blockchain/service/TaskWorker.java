@@ -42,8 +42,13 @@ public class TaskWorker {
 
     private static final Logger log = LoggerFactory.getLogger(TaskWorker.class);
 
-    /** Limite de gás de uma transferência simples de ETH (P8). */
-    private static final BigInteger GAS_LIMIT = BigInteger.valueOf(21_000);
+    /**
+     * Limite de gás fixo da transferência (decisão 7 da seção 12 do desenho).
+     * Desde o Glamsterdam (EIP-8037, ativo na Sepolia em 06/10/2026), enviar valor a
+     * uma conta que ainda não existe custa cerca de 207 mil de gás; para conta que já
+     * existe, continua 21.000. 500.000 cobre os dois casos, e o gás não usado é devolvido.
+     */
+    static final BigInteger GAS_LIMIT = BigInteger.valueOf(500_000);
 
     private final TaskRepository taskRepository;
     private final WalletRepository walletRepository;

@@ -222,7 +222,7 @@ Regra: `transaction_hash` fica preenchido só enquanto a transação pode estar 
 **Fase B: enviar** (tasks `PENDING` sem hash), só para carteiras que **não** têm task em acompanhamento (uma task por carteira de cada vez):
 1. Ler a chave da carteira (CT5) e decifrar na memória.
 2. Obter nonce (CT21) e preço do gás (CT22).
-3. Montar a transação (valor, destino, gas 21000, `chainId`), assinar e calcular o hash localmente.
+3. Montar a transação (valor, destino, limite de gás fixo de 500.000, `chainId`), assinar e calcular o hash localmente. O limite era 21000 (P8); mudou no H07.1 (decisão 7 da seção 12).
 4. **Gravar `transaction_hash` e `signed_transaction` na task, em transação de banco, antes de enviar.**
 5. Enviar (CT23).
    - Erro de JSON-RPC (saldo insuficiente, nonce inválido, gás insuficiente): **apagar** `transaction_hash` e `signed_transaction`, marcar `FAILED` com `REJECTED_BY_NETWORK` e notificar sem hash.
@@ -283,7 +283,7 @@ Usado dentro de `Web3jEthereumClient` (e do `WalletService` para gerar o par de 
 | Par de chaves | `Keys.createEcKeyPair()`, `Credentials.create(keyPair)`, endereço via `credentials.getAddress()` |
 | Saldo | `ethGetBalance(addr, DefaultBlockParameterName.LATEST)` e `Convert.fromWei(..., Unit.ETHER)` |
 | Nonce | `ethGetTransactionCount(addr, DefaultBlockParameterName.PENDING)` |
-| Gás | `ethGasPrice()`; limite fixo 21000 (P8) |
+| Gás | `ethGasPrice()`; limite fixo 500.000 (decisão 7 da seção 12; a P8 diz 21000) |
 | Montar | `RawTransaction.createEtherTransaction(nonce, gasPrice, gasLimit, to, valueWei)` |
 | Assinar | `TransactionEncoder.signMessage(raw, chainId, credentials)` |
 | Hash local | `Numeric.toHexString(Hash.sha3(signedBytes))` |
@@ -370,7 +370,7 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
   1. **Banco:** coluna `signed_transaction TEXT NULL` em `task`, mapeada na entidade e emendada no CT11. No banco de desenvolvimento entrou por `ALTER TABLE` (sem `down -v`, para não perder a carteira de demonstração).
   2. **RPC:** `EthereumClient` ganhou `getTransactionCount` (bloco `pending`, CT21), `getGasPrice` (CT22) e `sendRawTransaction` (CT23). `RpcException` tem duas subclasses: `RpcUnavailableException` (conexão, tempo esgotado, HTTP 429/5xx, resposta ilegível) e `RpcRejectedException` (objeto `error` do JSON-RPC, com código e mensagem do nó). O CT7 continua devolvendo 502 `RPC_UNAVAILABLE` nos dois casos. Nenhuma mensagem contém a URL do RPC; a mensagem do nó pode ir ao log.
   3. **Task e repository:** transições simples na entidade (`markSigned`, `markRejected`, `markFailed`), todas alterando `updated_at`. `TaskRepository` ganhou `findPendingWithoutHash` (mais antigas primeiro), `existsPendingWithHashFrom` e `update` (merge), cada um com transação própria; nenhuma transação de banco fica aberta durante chamada RPC.
-  4. **Ciclo (`TaskWorker.runCycle`):** ordem carteira → nonce → gás → decifrar (AAD = endereço) → assinar (legada, gas 21000, `chainId` do `AppConfig`) → zerar a chave → gravar hash e transação assinada → enviar. Carteira ausente, chave que não decifra ou falha de RPC no nonce/gás: `FAILED`/`INTERNAL_ERROR`, nada enviado. Recusa no envio: `FAILED`/`REJECTED_BY_NETWORK`, hash e transação assinada apagados. Sem resposta no envio: nada muda (fica `PENDING` com hash; a Fase A reenvia), divergência do CT23 registrada no próprio contrato. Hash do nó diferente do calculado: aviso no log, vale o local. No máximo uma task por carteira: pula a carteira com task `PENDING` com hash ou já tratada no mesmo ciclo. Exceção inesperada numa task: só log, estado mantido, as outras seguem. Logs só com taskId, estado e hash.
+  4. **Ciclo (`TaskWorker.runCycle`):** ordem carteira → nonce → gás → decifrar (AAD = endereço) → assinar (legada, limite de gás fixo da decisão 7, `chainId` do `AppConfig`) → zerar a chave → gravar hash e transação assinada → enviar. Carteira ausente, chave que não decifra ou falha de RPC no nonce/gás: `FAILED`/`INTERNAL_ERROR`, nada enviado. Recusa no envio: `FAILED`/`REJECTED_BY_NETWORK`, hash e transação assinada apagados. Sem resposta no envio: nada muda (fica `PENDING` com hash; a Fase A reenvia), divergência do CT23 registrada no próprio contrato. Hash do nó diferente do calculado: aviso no log, vale o local. No máximo uma task por carteira: pula a carteira com task `PENDING` com hash ou já tratada no mesmo ciclo. Exceção inesperada numa task: só log, estado mantido, as outras seguem. Logs só com taskId, estado e hash.
      **Limitação aceita da chave na memória:** o `byte[]` decifrado é zerado no `finally`, mas o Web3j cria um `BigInteger` (imutável) ao montar o `ECKeyPair`, e esse valor fica na memória até o coletor de lixo. Mitigação: `ECKeyPair` e `Credentials` só como variáveis locais do método que assina, a chave nunca vira `String` e nunca vai ao log.
   5. **Agendamento:** `ScheduledExecutorService` de uma thread com `scheduleWithFixedDelay(WORKER_INTERVAL_SECONDS)` e `try/catch` geral no ciclo. No desligamento: para o Javalin, para o executor e espera até 30 s o ciclo terminar antes de fechar a `SessionFactory`; o compose de desenvolvimento usa `stop_grace_period: 40s`.
   6. **Fora deste passo:** Fase A (recibo, reenvio, webhook), tempo limite de task e multiplicador de gás.

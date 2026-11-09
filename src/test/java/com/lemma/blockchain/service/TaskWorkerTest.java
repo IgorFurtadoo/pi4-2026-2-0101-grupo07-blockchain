@@ -278,7 +278,8 @@ class TaskWorkerTest {
         assertEquals(new BigInteger("10000000000000000"), signed.getValue()); // 0.01 ETH em wei
         assertEquals(NONCE, signed.getNonce());
         assertEquals(GAS_PRICE, signed.getGasPrice());
-        assertEquals(BigInteger.valueOf(21_000), signed.getGasLimit());
+        assertEquals(TaskWorker.GAS_LIMIT, signed.getGasLimit());
+        assertEquals(BigInteger.valueOf(500_000), signed.getGasLimit());
         assertEquals(CHAIN_ID, signed.getChainId());
 
         Stored s = stored(task);
