@@ -48,6 +48,14 @@ public class Task {
     @Column(name = "failure_reason", length = 32)
     private FailureReason failureReason;
 
+    /**
+     * Transação assinada em hexadecimal, gravada junto com o hash antes do envio
+     * (seção 7.3 do desenho, emenda do CT11). Interna: não sai em CT14 nem em CT15.
+     * A coluna é TEXT; o columnDefinition faz o validate esperar TEXT, não VARCHAR.
+     */
+    @Column(name = "signed_transaction", columnDefinition = "TEXT")
+    private String signedTransaction;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -95,6 +103,10 @@ public class Task {
 
     public FailureReason getFailureReason() {
         return failureReason;
+    }
+
+    public String getSignedTransaction() {
+        return signedTransaction;
     }
 
     public Instant getCreatedAt() {
