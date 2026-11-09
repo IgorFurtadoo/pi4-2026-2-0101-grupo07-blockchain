@@ -25,7 +25,7 @@ Resposta `200`.
 |---|---|---|---|
 | taskId | texto | sim | a3f1c2d4-5b6e-4f70-8a91-0c2d3e4f5a6b |
 | status | um de: PENDING, CONFIRMED, FAILED | sim | CONFIRMED |
-| transactionHash | texto | não (ausente antes do envio à rede) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
+| transactionHash | texto | não (ausente antes da assinatura e depois de uma recusa da rede) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
 | failureReason | um de: REJECTED_BY_NETWORK, TRANSACTION_REVERTED, INTERNAL_ERROR | não (só quando `status` é FAILED) | REJECTED_BY_NETWORK |
 | updatedAt | data e hora | sim | 2026-10-20T14:36:10Z |
 
@@ -36,3 +36,5 @@ Resposta `200`.
 | `X-Service-Key` ausente ou incorreta | HTTP 401, `code` SERVICE_KEY_INVALID |
 | `taskId` inexistente | HTTP 404, `code` TASK_NOT_FOUND |
 | Falha inesperada, incluindo Banco do Blockchain Service indisponível | HTTP 500, `code` INTERNAL_ERROR |
+
+Nota (emenda do H07.1): o hash é gravado em CT11 antes do envio à rede. Por isso, `transactionHash` pode aparecer um instante antes de a transação ser enviada e sumir se a rede recusar o envio; nesse caso a task fica `FAILED` com `failureReason` REJECTED_BY_NETWORK e sem `transactionHash`.

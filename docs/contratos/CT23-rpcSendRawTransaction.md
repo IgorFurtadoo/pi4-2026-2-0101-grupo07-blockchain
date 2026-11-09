@@ -27,4 +27,6 @@ Envia à rede a transação já assinada pelo Blockchain Service. A chave privad
 | Quando | O que volta |
 |---|---|
 | Transação recusada pela rede (saldo insuficiente, nonce inválido, gas insuficiente) | Objeto `error` do JSON-RPC. A task vai para `FAILED`, `failureReason` REJECTED_BY_NETWORK |
-| Provedor fora do ar, tempo esgotado ou limite excedido | Falha de conexão ou HTTP 429/5xx. A task vai para `FAILED`, `failureReason` INTERNAL_ERROR |
+| Provedor fora do ar, tempo esgotado ou limite excedido | Falha de conexão ou HTTP 429/5xx. A task continua `PENDING`, com o `transaction_hash` e a transação assinada já gravados em CT11 |
+
+Nota (emenda do H07.1): sem resposta do provedor, não dá para saber se a transação chegou à rede. Marcar `FAILED` poderia mostrar como falha uma transação que ainda vai confirmar. Por isso a task continua `PENDING` com o hash, e o acompanhamento (seção 7.3 do desenho) confere o recibo e, se a rede não conhecer o hash, reenvia a mesma transação assinada.

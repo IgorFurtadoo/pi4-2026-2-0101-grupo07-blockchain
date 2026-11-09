@@ -21,8 +21,9 @@ Campos para gravar ou atualizar uma task (nomes de coluna em `snake_case`).
 | destination_address | texto | sim | 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 |
 | amount_eth | decimal | sim | 0.01 |
 | status | um de: PENDING, CONFIRMED, FAILED | sim | PENDING |
-| transaction_hash | texto | não (preenchido após o envio à rede) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
+| transaction_hash | texto | não (gravado depois da assinatura e antes do envio à rede; apagado se a rede recusar) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
 | failure_reason | um de: REJECTED_BY_NETWORK, TRANSACTION_REVERTED, INTERNAL_ERROR | não (só quando `status` é FAILED) | REJECTED_BY_NETWORK |
+| signed_transaction | texto (hexadecimal) | não (interno; gravado junto com `transaction_hash` e apagado com ele) | 0xf86c0785... |
 | created_at | data e hora | sim | 2026-10-20T14:35:00Z |
 | updated_at | data e hora | sim | 2026-10-20T14:35:00Z |
 
@@ -37,8 +38,9 @@ Campos devolvidos na leitura de uma task: os mesmos da entrada.
 | destination_address | texto | sim | 0x5B38Da6a701c568545dCfcB03FcB875f56beddC4 |
 | amount_eth | decimal | sim | 0.01 |
 | status | um de: PENDING, CONFIRMED, FAILED | sim | CONFIRMED |
-| transaction_hash | texto | não (ausente antes do envio à rede) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
+| transaction_hash | texto | não (ausente antes da assinatura e depois de uma recusa da rede) | 0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060 |
 | failure_reason | um de: REJECTED_BY_NETWORK, TRANSACTION_REVERTED, INTERNAL_ERROR | não (só quando `status` é FAILED) | REJECTED_BY_NETWORK |
+| signed_transaction | texto (hexadecimal) | não (interno; gravado junto com `transaction_hash` e apagado com ele) | 0xf86c0785... |
 | created_at | data e hora | sim | 2026-10-20T14:35:00Z |
 | updated_at | data e hora | sim | 2026-10-20T14:36:10Z |
 
@@ -49,3 +51,8 @@ Campos devolvidos na leitura de uma task: os mesmos da entrada.
 | Gravar com `task_id` já existente | Violação de unicidade da chave. O Blockchain Service responde HTTP 500, `code` INTERNAL_ERROR |
 | Ler ou atualizar um `task_id` inexistente | Nenhum registro. Em CT14 vira HTTP 404, `code` TASK_NOT_FOUND |
 | Banco do Blockchain Service indisponível | Falha de conexão. O Blockchain Service responde HTTP 500, `code` INTERNAL_ERROR |
+
+Notas (emenda do H07.1):
+- `transaction_hash` e `signed_transaction` são gravados na task **antes** de chamar CT23. Se o Blockchain Service cair entre a gravação e o envio, ou o envio não tiver resposta, a task fica `PENDING` com o hash e o acompanhamento retoma dali (seção 7.3 do desenho).
+- Se a rede recusar o envio (objeto `error` em CT23), os dois campos são apagados e a task vai para `FAILED` com `failureReason` REJECTED_BY_NETWORK: a transação nunca esteve na rede.
+- `signed_transaction` é interno ao Blockchain Service. Guarda a transação assinada para reenviá-la com o mesmo hash e nonce; não sai em CT14 nem em CT15.

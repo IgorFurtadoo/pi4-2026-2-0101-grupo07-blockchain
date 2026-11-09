@@ -27,6 +27,10 @@ public class KeyCipher {
     private static final int TAG_BITS = 128;
     private static final int TAG_BYTES = TAG_BITS / 8;
 
+    /** Mesma mensagem para as três saídas: não diz qual parte falhou nem mostra o valor. */
+    private static final String DECRYPT_FAILED =
+            "falha ao decifrar a chave da carteira: chave de cifragem incorreta ou dado alterado";
+
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
 
@@ -62,10 +66,10 @@ public class KeyCipher {
         try {
             data = Base64.getDecoder().decode(stored);
         } catch (IllegalArgumentException e) {
-            throw new IllegalStateException("falha ao decifrar a chave da carteira");
+            throw new IllegalStateException(DECRYPT_FAILED);
         }
         if (data.length < IV_BYTES + TAG_BYTES) {
-            throw new IllegalStateException("falha ao decifrar a chave da carteira");
+            throw new IllegalStateException(DECRYPT_FAILED);
         }
         try {
             Cipher cipher = Cipher.getInstance(TRANSFORMATION);
@@ -74,7 +78,7 @@ public class KeyCipher {
             return cipher.doFinal(data, IV_BYTES, data.length - IV_BYTES);
         } catch (GeneralSecurityException e) {
             // Tag inválida: texto adulterado, AAD diferente ou chave de cifragem errada.
-            throw new IllegalStateException("falha ao decifrar a chave da carteira");
+            throw new IllegalStateException(DECRYPT_FAILED);
         }
     }
 }
