@@ -346,6 +346,7 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 | Coluna interna `signed_transaction` em `task`; `transaction_hash` passa a ser gravado antes do envio (e apagado se a rede recusar) | Emendar CT11 | Permite reenviar a mesma transação com segurança e retomar após queda. **Aplicada no H07.1 (CT11 e CT14 emendados).** |
 | Chamada `eth_getTransactionByHash` | Novo contrato (CT24) | Distinguir "rede não conhece o hash" de "ainda sem recibo" |
 | Falha de conexão no envio (CT23) | CT23 diz FAILED/INTERNAL_ERROR; este desenho mantém PENDING e tenta de novo | Evita marcar FAILED uma transação que pode ter chegado à rede. **Aplicada no H07.1 (CT23 emendado).** |
+| Limite de gás fixo de 500.000 | P8 e o passo 8 do fluxo E8 dizem 21000 | Com o Glamsterdam (EIP-8037) na Sepolia, 21000 não basta para enviar a conta nova (decisão 7 abaixo). **Aplicada no H07.1; a Especificação ainda não foi emendada.** |
  
 ### Decisões para o grupo [Sugestão]
 1. Banco como fila + um worker, em vez de uma thread por task.
@@ -374,6 +375,13 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
      **Limitação aceita da chave na memória:** o `byte[]` decifrado é zerado no `finally`, mas o Web3j cria um `BigInteger` (imutável) ao montar o `ECKeyPair`, e esse valor fica na memória até o coletor de lixo. Mitigação: `ECKeyPair` e `Credentials` só como variáveis locais do método que assina, a chave nunca vira `String` e nunca vai ao log.
   5. **Agendamento:** `ScheduledExecutorService` de uma thread com `scheduleWithFixedDelay(WORKER_INTERVAL_SECONDS)` e `try/catch` geral no ciclo. No desligamento: para o Javalin, para o executor e espera até 30 s o ciclo terminar antes de fechar a `SessionFactory`; o compose de desenvolvimento usa `stop_grace_period: 40s`.
   6. **Fora deste passo:** Fase A (recibo, reenvio, webhook), tempo limite de task e multiplicador de gás.
+  7. **Limite de gás fixo de 500.000** (constante `GAS_LIMIT` no `TaskWorker`), no lugar dos 21000 da P8. Decidido pelo Igor em 09/11 (H07.1).
+     - **Causa:** a Sepolia ativou o Glamsterdam (EIP-8037) em 06/10/2026. Desde então, enviar valor a uma conta que ainda não existe (saldo 0, nonce 0, sem código) custa cerca de 207 mil de gás; para conta que já existe, continua 21.000. O primeiro envio real (tx `0x14d26d92…ea2a`, 09/11) usou 21000 para uma conta vazia e reverteu por falta de gás (*out of gas*), pagando só a taxa.
+     - **Medições** (`eth_estimateGas`, 0,001 ETH, 09/11): 207.391 para conta vazia (quatro endereços, inclusive um gerado ao acaso) e 21.000 para conta existente. Os mesmos números no PublicNode e no ethpandaops.
+     - **Por que fixo e não `eth_estimateGas`:** seria uma chamada RPC nova (um contrato a mais), mais um ponto de falha por task, e a estimativa pode mudar entre a consulta e a mineração. Um limite alto não custa mais: a rede cobra só o gás usado e devolve o resto.
+     - **Consequência:** antes de aceitar a transação, a rede exige saldo para o valor mais 500.000 × preço do gás. Com o preço da Sepolia hoje (centenas de wei), a diferença é desprezível.
+     - **Limitação conhecida:** se o custo da rede subir além de 500.000, a transação reverte e o passo 7 marca `FAILED`/`TRANSACTION_REVERTED`; o usuário perde só a taxa.
+     - **Alternativa futura:** `eth_estimateGas` com margem, emendando a P8 e criando o contrato da chamada.
 ## 13. Ordem de implementação e critério de pronto
  
 | # | Passo | Classes principais | Cards | Pronto quando |
