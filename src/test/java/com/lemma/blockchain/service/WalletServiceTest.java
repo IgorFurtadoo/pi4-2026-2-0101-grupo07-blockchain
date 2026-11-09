@@ -2,6 +2,8 @@ package com.lemma.blockchain.service;
 
 import com.lemma.blockchain.client.EthereumClient;
 import com.lemma.blockchain.client.RpcException;
+import com.lemma.blockchain.client.RpcRejectedException;
+import com.lemma.blockchain.client.RpcUnavailableException;
 import com.lemma.blockchain.crypto.KeyCipher;
 import com.lemma.blockchain.dto.BalanceResponse;
 import com.lemma.blockchain.exception.ApiException;
@@ -62,19 +64,35 @@ class WalletServiceTest {
         }
     }
 
-    /** RPC falso: devolve o saldo configurado ou falha, e conta as chamadas. */
+    /** RPC falso: devolve o saldo configurado ou lança a falha configurada, e conta as chamadas. */
     private static class FakeEthereumClient implements EthereumClient {
         BigInteger balanceWei = BigInteger.ZERO;
-        boolean fail = false;
+        RpcException failure = null;
         final List<String> calls = new ArrayList<>();
 
         @Override
         public BigInteger getBalance(String address) throws RpcException {
             calls.add(address);
-            if (fail) {
-                throw new RpcException("falha simulada");
+            if (failure != null) {
+                throw failure;
             }
             return balanceWei;
+        }
+
+        // O WalletService não usa as chamadas do worker.
+        @Override
+        public BigInteger getTransactionCount(String address) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public BigInteger getGasPrice() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public String sendRawTransaction(String signedTransactionHex) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -230,12 +248,18 @@ class WalletServiceTest {
     @Test
     void clientFailureBecomesRpcUnavailable() {
         storeWallet();
-        ethereumClient.fail = true;
+        List<RpcException> failures = List.of(
+                new RpcUnavailableException("falha simulada"),
+                new RpcRejectedException(-32602, "invalid argument"));
 
-        ApiException e = assertThrows(ApiException.class, () -> service.getBalance(STORED_ADDRESS));
+        for (RpcException failure : failures) {
+            ethereumClient.failure = failure;
+            ApiException e = assertThrows(ApiException.class, () -> service.getBalance(STORED_ADDRESS));
 
-        assertEquals(502, e.getStatus());
-        assertEquals("RPC_UNAVAILABLE", e.getCode());
+            String kind = failure.getClass().getSimpleName();
+            assertEquals(502, e.getStatus(), kind);
+            assertEquals("RPC_UNAVAILABLE", e.getCode(), kind);
+        }
     }
 
     @Test
