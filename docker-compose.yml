@@ -25,6 +25,9 @@ services:
   blockchain-service:
     build: .
     env_file: .env
+    # O Main espera até 30 s o ciclo do worker terminar antes de fechar o banco;
+    # o padrão do Docker (10 s) mataria o processo antes.
+    stop_grace_period: 40s
     depends_on:
       blockchain-db:
         condition: service_healthy

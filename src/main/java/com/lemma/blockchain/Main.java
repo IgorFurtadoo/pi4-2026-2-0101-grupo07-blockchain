@@ -16,22 +16,31 @@ import com.lemma.blockchain.repository.Database;
 import com.lemma.blockchain.repository.TaskRepository;
 import com.lemma.blockchain.repository.WalletRepository;
 import com.lemma.blockchain.service.TaskService;
+import com.lemma.blockchain.service.TaskWorker;
 import com.lemma.blockchain.service.WalletService;
 import io.javalin.Javalin;
 import org.hibernate.SessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
 /**
  * Ponto de entrada do Blockchain Service.
  *
- * Lê a configuração, abre o acesso ao banco e sobe o Javalin. Se faltar variável,
+ * Lê a configuração, abre o acesso ao banco, sobe o Javalin e agenda o worker
+ * (seção 7.1 do desenho). Se faltar variável,
  * alguma for inválida ou o banco não bater com as entidades, encerra com código 1
  * e uma mensagem clara, antes de abrir a porta. As peças são montadas à mão aqui.
  */
 public class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
+
+    /** Quanto o desligamento espera o ciclo em andamento terminar. */
+    private static final int WORKER_SHUTDOWN_WAIT_SECONDS = 30;
 
     public static void main(String[] args) {
         AppConfig config;
@@ -62,6 +71,8 @@ public class Main {
         TaskService taskService = new TaskService(taskRepository, walletRepository);
         TransactionController transactionController = new TransactionController(taskService);
         TaskController taskController = new TaskController(taskService);
+        TaskWorker taskWorker = new TaskWorker(taskRepository, walletRepository, keyCipher,
+                ethereumClient, config.chainId());
 
         Javalin app = Javalin.create(javalin -> {
             javalin.jsonMapper(JsonConfig.jsonMapper());
@@ -78,11 +89,47 @@ public class Main {
             javalin.routes.get("/tasks/{taskId}", taskController::get); // CT14
         }).start(config.serverPort());
 
+        // Worker: uma única thread; o próximo ciclo começa WORKER_INTERVAL_SECONDS depois
+        // do fim do anterior, então dois ciclos nunca rodam ao mesmo tempo.
+        ScheduledExecutorService workerExecutor =
+                Executors.newSingleThreadScheduledExecutor(runnable -> new Thread(runnable, "task-worker"));
+        workerExecutor.scheduleWithFixedDelay(() -> runWorkerCycle(taskWorker),
+                config.workerIntervalSeconds(), config.workerIntervalSeconds(), TimeUnit.SECONDS);
+
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             app.stop();
-            sessionFactory.close();
+            stopWorker(workerExecutor);
+            sessionFactory.close(); // só depois de o ciclo terminar: ele ainda pode gravar no banco
         }));
 
-        log.info("Blockchain Service no ar na porta {}", config.serverPort());
+        log.info("Blockchain Service no ar na porta {}; worker a cada {} s",
+                config.serverPort(), config.workerIntervalSeconds());
+    }
+
+    /**
+     * Um ciclo do worker com try/catch geral: uma exceção que escapasse daqui
+     * cancelaria em silêncio todos os ciclos seguintes do agendador.
+     */
+    private static void runWorkerCycle(TaskWorker taskWorker) {
+        try {
+            taskWorker.runCycle();
+        } catch (RuntimeException e) {
+            log.error("Ciclo do worker falhou ({}: {}); tenta de novo no próximo",
+                    e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /** Não agenda novos ciclos e espera o ciclo em andamento terminar. */
+    private static void stopWorker(ScheduledExecutorService workerExecutor) {
+        workerExecutor.shutdown();
+        try {
+            if (!workerExecutor.awaitTermination(WORKER_SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                log.warn("Ciclo do worker não terminou em {} s; interrompendo", WORKER_SHUTDOWN_WAIT_SECONDS);
+                workerExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            workerExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }
