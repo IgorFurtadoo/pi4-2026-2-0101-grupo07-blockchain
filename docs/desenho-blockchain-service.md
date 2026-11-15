@@ -350,15 +350,18 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 ## 11. Testes
  
 1. **Unitários** (sem rede): `KeyCipher` (cifra e decifra; adulterar o texto ou o AAD falha); conversão ETH↔wei (0.01, 18 casas ok, 19 casas rejeitado, 0 e negativo); validação de endereço e de valor nos services; filtro `X-Service-Key`.
-2. **Worker com `EthereumClient` falso** (chamando `TaskWorker.runCycle()` direto), que é onde está o risco:
-   - caminho feliz: PENDING → hash gravado antes do envio → CONFIRMED → webhook chamado;
-   - recibo `0x0` → FAILED/TRANSACTION_REVERTED;
-   - rede recusa → FAILED/REJECTED_BY_NETWORK, hash apagado, webhook sem hash;
-   - queda entre gravar o hash e enviar: task com hash e `getTransactionByHash` vazio → reenvio uma vez;
-   - rede já conhece o hash → nenhum reenvio;
-   - duas tasks da mesma carteira → a segunda só inicia depois de a primeira ficar final;
-   - falha do webhook → estado final mantido.
-3. **Roteiro manual na Sepolia**, com script `curl` versionado: criar carteira, abastecer na torneira, consultar saldo, enviar, conferir no Etherscan, reiniciar o container no meio e conferir que a task termina.
+2. **Worker com `EthereumClient` falso** (chamando `TaskWorker.runCycle()` direto), que é onde está o risco. Testes em `TaskWorkerTest` e, para a queda e o reinício (worker novo sobre o mesmo repositório), `TaskWorkerRestartTest` [Aplicado no H09.1]:
+   - caminho feliz: PENDING → hash gravado antes do envio → CONFIRMED → webhook chamado (`TaskWorkerTest.hashAndSignedTransactionAreStoredBeforeSending`, `TaskWorkerTest.successfulReceiptConfirmsKeepsHashAndNotifies`);
+   - recibo `0x0` → FAILED/TRANSACTION_REVERTED (`TaskWorkerTest.revertedReceiptFailsWithTransactionRevertedKeepingHash`, `TaskWorkerRestartTest.sentTransactionRevertedAfterRestartFailsKeepingHash`);
+   - rede recusa → FAILED/REJECTED_BY_NETWORK, hash apagado, webhook sem hash (`TaskWorkerTest.networkRejectionFailsAndErasesHashAndSignedTransaction`, `TaskWorkerTest.phaseBRejectionAlsoNotifiesWithoutHash`);
+   - queda entre gravar o hash e enviar: task com hash e `getTransactionByHash` vazio → reenvio uma vez (`TaskWorkerRestartTest.crashWhileSendingResendsTheSameSignedTransactionAfterRestart`, `TaskWorkerTest.unknownTransactionIsResentOnceWithTheSameSignedHex`);
+   - queda antes de assinar → o worker novo assina e envia uma vez (`TaskWorkerRestartTest.taskNeverSentIsSignedAndSentOnceAfterRestart`);
+   - rede já conhece o hash → nenhum reenvio (`TaskWorkerTest.knownTransactionWithoutReceiptChangesNothing`, `TaskWorkerRestartTest.sentTransactionIsNotResentAndConfirmsAfterRestart`);
+   - duas tasks da mesma carteira → a segunda só inicia depois de a primeira ficar final (`TaskWorkerTest.secondTaskOfSameWalletWaitsWhileFirstHasHash`, `TaskWorkerTest.confirmationInPhaseAFreesTheWalletForPhaseBInTheSameCycle`, `TaskWorkerRestartTest.secondTaskOfTheSameWalletWaitsForTheFirstAfterRestart`);
+   - falha do webhook → estado final mantido (`TaskWorkerTest.notificationFailureKeepsStateAndNextTaskContinues`);
+   - queda entre gravar o estado final e avisar → aviso perdido, recuperado pelo CT14 (`TaskWorkerRestartTest.lostNotificationIsNotResentAfterRestart`);
+   - CT14 depois do reinício → último estado gravado, sem RPC (`TaskWorkerRestartTest.getTaskAfterRestartAnswersTheLastStoredStateWithoutTheRpc`).
+3. **Roteiro manual na Sepolia**, com script `curl` versionado: criar carteira, abastecer na torneira, consultar saldo, enviar, conferir no Etherscan, reiniciar o container no meio e conferir que a task termina. O reinício no meio é o `RESTART_AFTER=accepted|sent` do `scripts/send-demo.sh` (H09.1; rodadas em `fluxo-e9-retomada.md`).
 ## 12. Divergências e decisões
  
 ### Mudanças que tocam contratos já escritos
@@ -420,6 +423,12 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
        3. O aviso é síncrono, na thread do worker: cada task final custa até 5 s se o webhook estiver fora, e o ciclo seguinte espera por isso. Aceito para o volume do projeto.
        4. Queda do processo entre gravar o estado final e enviar o webhook perde o aviso. Não há retentativa (P4); a Core API recupera pelo CT14. O passo 8 (E9) deve citar isso.
        5. Um nó público atrás de balanceador pode dizer "desconhecida" para uma transação enviada há pouco. O reenvio é idempotente, e o pior caso é um "already known", tratado como `PENDING`.
+- Retomada após reinício (E9). Decidido pelo responsável do módulo (Igor), no H09.1, em 15/11:
+  9. **Retomada.** Fluxo completo em `fluxo-e9-retomada.md` (não emenda a Especificação; as divergências vão ao relatório final).
+     - **Sem código de produção novo:** a Fase A e a Fase B já retomam tudo o que está em `task`. Não há rotina de partida: quem retoma é o primeiro ciclo do worker, WORKER_INTERVAL_SECONDS depois da subida (o `scheduleWithFixedDelay` do `Main` usa o mesmo valor como atraso inicial).
+     - **Três casos:** A (sem hash: assina e envia), B (com hash, rede não conhece: reenvia a mesma transação assinada, sem nonce novo), C (com hash, rede conhece: espera o recibo).
+     - **Prova:** `TaskWorkerRestartTest` (queda por `SimulatedCrash`, que estende `Error`, e worker novo sobre o mesmo repositório) e o `RESTART_AFTER` do `send-demo.sh`. Rodadas reais em 15/11: `accepted` (tx `0x7bb3…1da1`), `sent` (tx `0x2d14…dab7`) e uma extra com `docker compose kill` (tx `0x51d3…6cbc`); cada uma gerou uma única transação (destino +0.0005, nonce +1).
+     - **Limitações:** a limitação 4 da decisão 8 (aviso perdido, recuperado pelo CT14) fica fixada em teste; task sem tempo limite (item 1 de "Em aberto"); exige instância única.
 ## 13. Ordem de implementação e critério de pronto
  
 | # | Passo | Classes principais | Cards | Pronto quando |
@@ -431,6 +440,6 @@ Erros de RPC no worker não geram resposta HTTP: viram o motivo de `FAILED` (REJ
 | 5 | Pedido de envio e consulta de task | `Task`, `TaskRepository`, `TaskService`, `TransactionController`, `TaskController` | H05.1 | `POST /transactions` grava `PENDING` e responde 202; `GET /tasks/{id}` lê |
 | 6 | Worker: Fase B (assinar, gravar, enviar) | `TaskWorker`, `Web3jEthereumClient` (nonce, gás, envio) | H07.1 | Transação real aparece no Etherscan |
 | 7 | Worker: Fase A (recibo) e webhook | `TaskWorker`, `CoreApiClient` | H08.1 | Task chega a `CONFIRMED`; receptor falso recebe o CT15 |
-| 8 | Retomada após reinício: testes de queda e documentação do E9 | `TaskWorker` (o reenvio por `isTransactionKnown` já existe desde o passo 7) | H09.1 | Reiniciar o container no meio termina a task; testes de queda do item 2 da seção 11 passam |
+| 8 | Retomada após reinício: testes de queda e documentação do E9 | `TaskWorker` (o reenvio por `isTransactionKnown` já existe desde o passo 7) | H09.1 | Reiniciar o container no meio termina a task; testes de queda do item 2 da seção 11 passam. **Feito no H09.1 (15/11).** |
  
 Efeito no backlog: com este desenho, o H09.1 encolhe, porque a Fase A já faz a retomada. Ele vira essencialmente os testes de queda e a documentação do E9.
