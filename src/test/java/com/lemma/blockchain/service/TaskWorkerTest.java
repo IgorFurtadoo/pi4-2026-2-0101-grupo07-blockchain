@@ -72,7 +72,7 @@ class TaskWorkerTest {
         }
     }
 
-    private static class InMemoryTaskRepository extends TaskRepository {
+    static class InMemoryTaskRepository extends TaskRepository {
         final Map<String, Task> tasks = new LinkedHashMap<>();
         final Map<String, Stored> stored = new HashMap<>();
 
@@ -131,7 +131,7 @@ class TaskWorkerTest {
         }
     }
 
-    private static class InMemoryWalletRepository extends WalletRepository {
+    static class InMemoryWalletRepository extends WalletRepository {
         final List<Wallet> saved = new ArrayList<>();
         /** Endereços cuja leitura lança exceção, como um banco fora do ar. */
         final Set<String> broken = new HashSet<>();
@@ -162,7 +162,7 @@ class TaskWorkerTest {
      * Recibos, hashes conhecidos e falhas da Fase A são configurados por hash;
      * falhas de reenvio, pela transação assinada.
      */
-    private static class FakeEthereumClient implements EthereumClient {
+    static class FakeEthereumClient implements EthereumClient {
         private final InMemoryTaskRepository taskRepository;
         RpcException nonceFailure;
         RpcException gasFailure;
@@ -243,7 +243,7 @@ class TaskWorkerTest {
      * instante (para conferir que o estado final já estava no banco) e, se
      * configurado, lança a falha.
      */
-    private static class RecordingCoreApiClient extends CoreApiClient {
+    static class RecordingCoreApiClient extends CoreApiClient {
         private final InMemoryTaskRepository taskRepository;
         final List<String> notifiedTaskIds = new ArrayList<>();
         final List<Stored> storedAtNotify = new ArrayList<>();
@@ -282,7 +282,7 @@ class TaskWorkerTest {
         return bytes;
     }
 
-    private static String hashOf(String signedHex) {
+    static String hashOf(String signedHex) {
         return Numeric.toHexString(Hash.sha3(Numeric.hexStringToByteArray(signedHex)));
     }
 
