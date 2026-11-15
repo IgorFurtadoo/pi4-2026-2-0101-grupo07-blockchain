@@ -107,3 +107,5 @@ O `.env.example` traz `WALLET_ENCRYPTION_KEY=GERAR_COM_openssl_rand_-base64_32`,
 | Ver as tabelas | `docker compose exec blockchain-db sh -c 'MYSQL_PWD="$MYSQL_PASSWORD" mysql -u "$MYSQL_USER" blockchain -e "SHOW TABLES"'` |
 | Derrubar | `docker compose down` |
 | Derrubar e apagar o banco (o `schema.sql` roda de novo no próximo `up`) | `docker compose down -v`. **Apaga também a carteira de demonstração e, com ela, os fundos da torneira** (a chave só existe no banco). Para mudar o esquema num volume existente, use `ALTER TABLE`. |
+
+Criar a rede compartilhada com o Core API (uma vez por máquina) | docker network create lemma-dev

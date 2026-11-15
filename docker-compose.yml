@@ -34,6 +34,14 @@ services:
     ports:
       # Só no loopback, para testar com curl no desenvolvimento.
       - "127.0.0.1:8081:8081"
+    networks:
+      - default
+      - lemma-dev
 
 volumes:
   blockchain-db-data:
+
+networks:
+  # Rede compartilhada com o Core API em desenvolvimento (docker network create lemma-dev).
+  lemma-dev:
+    external: true
