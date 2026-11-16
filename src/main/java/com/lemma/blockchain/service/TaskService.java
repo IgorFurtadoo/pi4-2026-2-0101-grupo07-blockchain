@@ -63,16 +63,26 @@ public class TaskService {
      * Valor maior que zero, com no máximo 18 casas e 20 dígitos inteiros.
      * Zeros à direita não contam (1.000 é o mesmo que 1). Devolve o valor com
      * escala 18, igual à coluna, para gravar exatamente o que foi validado.
+     *
+     * A ordem das conferências evita conta grande e ArithmeticException com expoente
+     * extremo (1E+2147483647): cada passo só roda com valores que o anterior limitou.
      */
     private static BigDecimal validAmount(BigDecimal amountEth) {
+        // Zero e negativo saem antes de qualquer conta (inclusive 0E+2147483647).
         if (amountEth == null || amountEth.signum() <= 0) {
             throw invalidAmount();
         }
 
+        // Em long: em int, 1E+2147483647 estouraria e passaria no limite. A conta
+        // precision - scale não muda ao tirar zeros à direita, então vem antes disso.
+        long integerDigits = (long) amountEth.precision() - amountEth.scale();
+        if (integerDigits > MAX_INTEGER_DIGITS) {
+            throw invalidAmount();
+        }
+
+        // Aqui a escala já é no mínimo -19: tirar os zeros não estoura.
         BigDecimal stripped = amountEth.stripTrailingZeros();
-        int decimalPlaces = Math.max(stripped.scale(), 0);
-        int integerDigits = stripped.precision() - stripped.scale();
-        if (decimalPlaces > MAX_DECIMAL_PLACES || integerDigits > MAX_INTEGER_DIGITS) {
+        if (stripped.scale() > MAX_DECIMAL_PLACES) {
             throw invalidAmount();
         }
 

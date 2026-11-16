@@ -9,8 +9,14 @@ import com.lemma.blockchain.model.Wallet;
 import com.lemma.blockchain.repository.TaskRepository;
 import com.lemma.blockchain.repository.WalletRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.web3j.utils.Convert;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -162,6 +169,36 @@ class TaskServiceTest {
     @Test
     void twentyOneIntegerDigitsAreInvalid() {
         assertAmountInvalid("100000000000000000000");
+    }
+
+    @Test
+    void zeroWithDecimalPlaceIsInvalid() {
+        assertAmountInvalid("0.0");
+    }
+
+    // ---------- requestSubmission (CT10): valores extremos ----------
+
+    /** Expoentes extremos: recusados rápido, sem conta gigante e sem ArithmeticException (500). */
+    @ParameterizedTest
+    @ValueSource(strings = {"1E+2147483647", "100E+2147483647", "1E+999999999", "1E+20",
+            "1E-2147483647", "1E-19", "0E+2147483647", "-1E+2147483647"})
+    void extremeAmountIsInvalid(String amountEth) {
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> assertAmountInvalid(amountEth));
+    }
+
+    /** Bordas que continuam válidas: valor gravado e valor em wei (conversão do worker). */
+    @ParameterizedTest
+    @CsvSource({
+            "1E+19, 10000000000000000000.000000000000000000, 10000000000000000000000000000000000000",
+            "99999999999999999999, 99999999999999999999.000000000000000000, 99999999999999999999000000000000000000",
+            "1E-18, 0.000000000000000001, 1",
+            "0.1000000000000000000, 0.100000000000000000, 100000000000000000",
+    })
+    void boundaryAmountIsAcceptedUnchanged(String amountEth, String savedPlain, String wei) {
+        BigDecimal saved = savedAmountOf(amountEth);
+
+        assertEquals(savedPlain, saved.toPlainString());
+        assertEquals(new BigInteger(wei), Convert.toWei(saved, Convert.Unit.ETHER).toBigIntegerExact());
     }
 
     // ---------- requestSubmission (CT10): gravação e erros ----------
