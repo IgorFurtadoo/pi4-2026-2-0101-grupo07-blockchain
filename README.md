@@ -30,7 +30,7 @@ Os bancos não têm porta publicada.
 
 Serviço Java 21 (Javalin, Hibernate e Web3j) com o seu banco MySQL. Concentra toda a comunicação com a Ethereum Sepolia: gera as carteiras, guarda a chave privada cifrada com AES-256-GCM (ela nunca sai deste serviço), consulta saldo, assina e envia transações em segundo plano como tasks, acompanha o recibo e avisa o Core API por webhook e por socket TCP (CT27). As tasks ficam no banco e sobrevivem a reinícios. É chamado só pelo Core API, com `X-Service-Key`.
 
-Contratos em `docs/contratos/`, ADRs 0001, 0002, 0003 e 0005 em `docs/adr/`, desenho em `docs/desenho-blockchain-service.md` e retomada após reinício em `docs/fluxo-e9-retomada.md`.
+Contratos em `docs/contratos/`, ADRs 0001, 0002, 0003, 0005 e 0008 em `docs/adr/`, desenho em `docs/desenho-blockchain-service.md` e retomada após reinício em `docs/fluxo-e9-retomada.md`.
 
 ### Como rodar só o Blockchain Service
 

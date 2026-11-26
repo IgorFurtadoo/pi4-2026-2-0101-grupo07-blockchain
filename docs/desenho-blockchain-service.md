@@ -71,6 +71,7 @@ Portas [Sugestão]: Core API 8080, Blockchain Service 8081, External Data Servic
 | `CORE_API_WEBHOOK_URL` | Destino do CT15 | `http://core-api:8080/webhooks/tasks` |
 | `WORKER_INTERVAL_SECONDS` | Intervalo do worker | `5` |
 | `RPC_TIMEOUT_SECONDS` | Timeout de conexão e leitura no RPC | `10` |
+| `TASK_SOCKET_PORT` | Porta do socket de avisos (CT27). **Opcional**: padrão 9091; 0 desativa. Só na rede `lemma-dev` | `9091` |
  
 O `Main` lê tudo em uma classe `AppConfig` e **falha na subida** se faltar variável obrigatória. Assim, erro de configuração aparece na hora e não na primeira transação.
  
@@ -113,6 +114,10 @@ blockchain/
     CoreApiClient.java         webhook (CT15): notifyTaskCompleted(Task), classe concreta
   crypto/KeyCipher.java        AES-GCM
   exception/ApiException.java  status HTTP + code do erro
+  socket/                      canal de socket (CT27, ADR 0008): Partner, ConnectionAcceptor,
+                               ConnectionSupervisor, TaskNoticeBroadcaster
+com/lemma/socket/              mensagens do protocolo, idênticas no Core API: Message,
+                               SubscribeRequest, TaskCompletedNotice, ShutdownNotice
 ```
  
 `client` agrupa o que fala com sistema externo (Provedor RPC e Core API), que não cabe em controller, service nem repository.
@@ -293,6 +298,10 @@ Depois de gravar o estado final, e fora de qualquer transação de banco, o work
 - **Log:** só `taskId`, estado e status HTTP; a URL e a `X-Service-Key` nunca aparecem, e das exceções só o nome da classe (a mensagem pode trazer o host).
  
 Corrida conhecida: o aviso pode chegar antes de o Core API gravar a `eth_transaction` (404 `TRANSACTION_NOT_FOUND`). Já está coberto pelo CT14.
+ 
+### 7.6 Socket (CT27) [Aplicado no H08.1]
+
+Além do webhook, e sem substituí-lo, o serviço avisa a task concluída por um Socket TCP com serialização de objetos Java, no modelo do exemplo do professor (ADR 0008, ficha CT27). O `Main` sobe o `ConnectionAcceptor` em `TASK_SOCKET_PORT`; o Core API assina com `SubscribeRequest(SERVICE_KEY)`. No mesmo ponto em que o webhook é chamado (estado final já gravado), o worker chama antes `TaskNoticeBroadcaster.broadcast(TaskCompletedNotice)`, com os mesmos valores do CT15, dentro de um try/catch próprio: falha no socket nunca muda o estado da task nem impede o webhook. Sem confirmação e sem retentativa; quem estiver desconectado recupera pelo CT14. Limitação conhecida: a escrita para um assinante travado (que não lê) pode segurar o ciclo do worker até o buffer do TCP liberar. No desligamento limpo, depois de fechar o banco, envia `ShutdownNotice` e fecha as conexões.
  
 ## 8. Uso do Web3j
  
