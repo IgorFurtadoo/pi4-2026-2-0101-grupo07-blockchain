@@ -8,12 +8,16 @@ import com.lemma.blockchain.client.RpcRejectedException;
 import com.lemma.blockchain.client.RpcUnavailableException;
 import com.lemma.blockchain.config.AppConfig;
 import com.lemma.blockchain.crypto.KeyCipher;
+import com.lemma.blockchain.dto.TaskResponse;
 import com.lemma.blockchain.model.FailureReason;
 import com.lemma.blockchain.model.Task;
 import com.lemma.blockchain.model.TaskStatus;
 import com.lemma.blockchain.model.Wallet;
 import com.lemma.blockchain.repository.TaskRepository;
 import com.lemma.blockchain.repository.WalletRepository;
+import com.lemma.blockchain.socket.TaskNoticeBroadcaster;
+import com.lemma.socket.Message;
+import com.lemma.socket.TaskCompletedNotice;
 import org.junit.jupiter.api.Test;
 import org.web3j.crypto.ECKeyPair;
 import org.web3j.crypto.Hash;
@@ -264,13 +268,44 @@ class TaskWorkerTest {
         }
     }
 
+    /**
+     * Socket falso (CT27): em cada aviso, guarda a mensagem, o retrato gravado e
+     * quantos webhooks já tinham saído; se configurado, lança a falha.
+     */
+    static class RecordingBroadcaster extends TaskNoticeBroadcaster {
+        private final InMemoryTaskRepository taskRepository;
+        private final RecordingCoreApiClient coreApiClient;
+        final List<TaskCompletedNotice> notices = new ArrayList<>();
+        final List<Stored> storedAtBroadcast = new ArrayList<>();
+        final List<Integer> webhooksBeforeBroadcast = new ArrayList<>();
+        RuntimeException failure;
+
+        RecordingBroadcaster(InMemoryTaskRepository taskRepository, RecordingCoreApiClient coreApiClient) {
+            super(new ArrayList<>());
+            this.taskRepository = taskRepository;
+            this.coreApiClient = coreApiClient;
+        }
+
+        @Override
+        public void broadcast(Message message) {
+            TaskCompletedNotice notice = (TaskCompletedNotice) message;
+            notices.add(notice);
+            storedAtBroadcast.add(taskRepository.stored.get(notice.getTaskId()));
+            webhooksBeforeBroadcast.add(coreApiClient.notifiedTaskIds.size());
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
     private final InMemoryTaskRepository taskRepository = new InMemoryTaskRepository();
     private final InMemoryWalletRepository walletRepository = new InMemoryWalletRepository();
     private final KeyCipher keyCipher = new KeyCipher(randomBytes(32));
     private final FakeEthereumClient ethereumClient = new FakeEthereumClient(taskRepository);
     private final RecordingCoreApiClient coreApiClient = new RecordingCoreApiClient(taskRepository);
-    private final TaskWorker worker =
-            new TaskWorker(taskRepository, walletRepository, keyCipher, ethereumClient, coreApiClient, CHAIN_ID);
+    private final RecordingBroadcaster broadcaster = new RecordingBroadcaster(taskRepository, coreApiClient);
+    private final TaskWorker worker = new TaskWorker(taskRepository, walletRepository, keyCipher,
+            ethereumClient, coreApiClient, broadcaster, CHAIN_ID);
 
     private int tasksCreated = 0;
 
@@ -829,5 +864,57 @@ class TaskWorkerTest {
 
         assertEquals(1, ethereumClient.receiptQueries.size());
         assertNotifiedOnce(task);
+    }
+
+    // ---------- aviso pelo socket (CT27) ----------
+
+    /** O aviso pelo socket leva os mesmos valores do webhook (TaskResponse) e sai antes dele. */
+    @Test
+    void socketNoticeHasTheWebhookValuesAndGoesBeforeIt() {
+        Task task = storeSentTask(storeWallet());
+        ethereumClient.receipts.put(stored(task).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+
+        worker.runCycle();
+
+        assertEquals(1, broadcaster.notices.size());
+        TaskCompletedNotice notice = broadcaster.notices.get(0);
+        TaskResponse body = TaskResponse.from(task);
+        assertEquals(body.taskId(), notice.getTaskId());
+        assertEquals("CONFIRMED", notice.getStatus());
+        assertEquals(body.transactionHash(), notice.getTransactionHash());
+        assertNull(notice.getFailureReason());
+        assertEquals(body.updatedAt(), notice.getUpdatedAt());
+        assertEquals(stored(task), broadcaster.storedAtBroadcast.get(0), "aviso só depois de gravar");
+        assertEquals(0, broadcaster.webhooksBeforeBroadcast.get(0), "socket antes do webhook");
+        assertNotifiedOnce(task);
+    }
+
+    @Test
+    void socketNoticeWithoutHashCarriesTheFailureReason() {
+        Task task = storeTask(storeWallet());
+        ethereumClient.sendFailure = new RpcRejectedException(-32000, "insufficient funds for gas * price + value");
+
+        worker.runCycle();
+
+        TaskCompletedNotice notice = broadcaster.notices.get(0);
+        assertEquals("FAILED", notice.getStatus());
+        assertEquals("REJECTED_BY_NETWORK", notice.getFailureReason());
+        assertNull(notice.getTransactionHash());
+    }
+
+    @Test
+    void socketFailureDoesNotChangeStateNorPreventWebhook() {
+        Task confirmed = storeSentTask(storeWallet());
+        Task rejected = storeTask(storeWallet());
+        ethereumClient.receipts.put(stored(confirmed).transactionHash(), new ReceiptInfo(true, BigInteger.ONE));
+        ethereumClient.sendFailure = new RpcRejectedException(-32000, "insufficient funds for gas * price + value");
+        broadcaster.failure = new RuntimeException("falha simulada no socket");
+
+        worker.runCycle();
+
+        assertEquals(TaskStatus.CONFIRMED, stored(confirmed).status());
+        assertEquals(TaskStatus.FAILED, stored(rejected).status());
+        assertEquals(FailureReason.REJECTED_BY_NETWORK, stored(rejected).failureReason());
+        assertEquals(List.of(confirmed.getTaskId(), rejected.getTaskId()), coreApiClient.notifiedTaskIds);
     }
 }

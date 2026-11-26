@@ -139,4 +139,31 @@ class AppConfigTest {
         assertFalse(text.contains("jdbc:mysql"));
         assertFalse(text.contains("test-jdbc-password"));
     }
+
+    // ---------- TASK_SOCKET_PORT (opcional, CT27) ----------
+
+    @Test
+    void taskSocketPortDefaultsTo9091WhenAbsent() {
+        // validEnv() não tem TASK_SOCKET_PORT, como os .env antigos.
+        assertEquals(9091, AppConfig.fromEnv(validEnv()).taskSocketPort());
+    }
+
+    @Test
+    void taskSocketPortAcceptsZeroToDisableAndOtherPorts() {
+        Map<String, String> env = validEnv();
+        env.put("TASK_SOCKET_PORT", "0");
+        assertEquals(0, AppConfig.fromEnv(env).taskSocketPort());
+
+        env.put("TASK_SOCKET_PORT", "9500");
+        assertEquals(9500, AppConfig.fromEnv(env).taskSocketPort());
+    }
+
+    @Test
+    void rejectsInvalidTaskSocketPort() {
+        for (String invalid : new String[] {"-1", "65536", "abc"}) {
+            Map<String, String> env = validEnv();
+            env.put("TASK_SOCKET_PORT", invalid);
+            assertTrue(failureMessage(env).contains("TASK_SOCKET_PORT inválida"), invalid);
+        }
+    }
 }

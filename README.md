@@ -28,7 +28,7 @@ Os bancos não têm porta publicada.
 
 ## Este módulo: Blockchain Service
 
-Serviço Java 21 (Javalin, Hibernate e Web3j) com o seu banco MySQL. Concentra toda a comunicação com a Ethereum Sepolia: gera as carteiras, guarda a chave privada cifrada com AES-256-GCM (ela nunca sai deste serviço), consulta saldo, assina e envia transações em segundo plano como tasks, acompanha o recibo e avisa o Core API por webhook. As tasks ficam no banco e sobrevivem a reinícios. É chamado só pelo Core API, com `X-Service-Key`.
+Serviço Java 21 (Javalin, Hibernate e Web3j) com o seu banco MySQL. Concentra toda a comunicação com a Ethereum Sepolia: gera as carteiras, guarda a chave privada cifrada com AES-256-GCM (ela nunca sai deste serviço), consulta saldo, assina e envia transações em segundo plano como tasks, acompanha o recibo e avisa o Core API por webhook e por socket TCP (CT27). As tasks ficam no banco e sobrevivem a reinícios. É chamado só pelo Core API, com `X-Service-Key`.
 
 Contratos em `docs/contratos/`, ADRs 0001, 0002, 0003 e 0005 em `docs/adr/`, desenho em `docs/desenho-blockchain-service.md` e retomada após reinício em `docs/fluxo-e9-retomada.md`.
 
@@ -60,7 +60,7 @@ Pré-requisito: Docker com o plugin Compose.
    docker compose logs -f blockchain-service
    ```
 
-   A porta fica publicada só em `127.0.0.1:8081`, para testes com `curl`. O banco não tem porta publicada. O webhook vai para `http://core-api:8080/webhooks/tasks` na `lemma-dev`; sem o Core API no ar, o aviso só é registrado no log.
+   A porta fica publicada só em `127.0.0.1:8081`, para testes com `curl`. O banco não tem porta publicada. O webhook vai para `http://core-api:8080/webhooks/tasks` na `lemma-dev`; sem o Core API no ar, o aviso só é registrado no log. O canal de socket (CT27) escuta em `TASK_SOCKET_PORT` (padrão 9091; 0 desativa) só na `lemma-dev`, sem porta publicada no host; o Core API se conecta em `blockchain-service:9091`. No log aparece `socket: servidor aguardando assinantes na porta 9091`.
 
 4. Confira: toda rota exige `X-Service-Key`.
 

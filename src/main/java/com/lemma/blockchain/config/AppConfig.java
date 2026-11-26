@@ -8,7 +8,7 @@ import java.util.Map;
 /**
  * Configuração do serviço, lida das variáveis de ambiente (seção 3.2 do desenho).
  *
- * Todas as variáveis são obrigatórias. Se faltar alguma ou o valor for inválido,
+ * Todas as variáveis são obrigatórias, menos TASK_SOCKET_PORT (padrão 9091). Se faltar alguma ou o valor for inválido,
  * {@link #fromEnv(Map)} lança {@link IllegalStateException} listando todos os
  * problemas de uma vez. A mensagem cita só o nome da variável, nunca o valor,
  * para não vazar segredo em log.
@@ -24,13 +24,17 @@ public record AppConfig(
         byte[] walletEncryptionKey,
         String coreApiWebhookUrl,
         int workerIntervalSeconds,
-        int rpcTimeoutSeconds) {
+        int rpcTimeoutSeconds,
+        int taskSocketPort) {
 
     /** chainId da Sepolia (P8). Qualquer outro valor é recusado, para nunca apontar para a mainnet. */
     public static final long SEPOLIA_CHAIN_ID = 11155111L;
 
     /** AES-256 precisa de chave de 32 bytes (CT5, seção 9 do desenho). */
     private static final int ENCRYPTION_KEY_BYTES = 32;
+
+    /** Porta do canal de socket (CT27) quando TASK_SOCKET_PORT não é informada. */
+    public static final int DEFAULT_TASK_SOCKET_PORT = 9091;
 
     public static AppConfig fromEnv(Map<String, String> env) {
         Reader reader = new Reader(env);
@@ -46,6 +50,7 @@ public record AppConfig(
         String coreApiWebhookUrl = reader.text("CORE_API_WEBHOOK_URL");
         int workerIntervalSeconds = reader.positiveInt("WORKER_INTERVAL_SECONDS");
         int rpcTimeoutSeconds = reader.positiveInt("RPC_TIMEOUT_SECONDS");
+        int taskSocketPort = reader.optionalPort("TASK_SOCKET_PORT", DEFAULT_TASK_SOCKET_PORT);
 
         if (!reader.problems.isEmpty()) {
             throw new IllegalStateException(String.join("; ", reader.problems));
@@ -53,7 +58,7 @@ public record AppConfig(
 
         return new AppConfig(serverPort, dbUrl, dbUser, dbPassword, rpcUrl, chainId,
                 serviceKey, walletEncryptionKey, coreApiWebhookUrl,
-                workerIntervalSeconds, rpcTimeoutSeconds);
+                workerIntervalSeconds, rpcTimeoutSeconds, taskSocketPort);
     }
 
     /**
@@ -68,7 +73,8 @@ public record AppConfig(
                 + ", chainId=" + chainId
                 + ", coreApiWebhookUrl=" + coreApiWebhookUrl
                 + ", workerIntervalSeconds=" + workerIntervalSeconds
-                + ", rpcTimeoutSeconds=" + rpcTimeoutSeconds + "]";
+                + ", rpcTimeoutSeconds=" + rpcTimeoutSeconds
+                + ", taskSocketPort=" + taskSocketPort + "]";
     }
 
     /** Lê cada variável e acumula os problemas encontrados, sem parar no primeiro. */
@@ -103,6 +109,24 @@ public record AppConfig(
                 // cai na mensagem abaixo
             }
             problems.add(name + " inválida: precisa ser um número inteiro maior que zero");
+            return 0;
+        }
+
+        /** Opcional: ausente ou em branco vira o padrão; 0 desativa; senão, 1 a 65535. */
+        int optionalPort(String name, int defaultPort) {
+            String value = env.get(name);
+            if (value == null || value.isBlank()) {
+                return defaultPort;
+            }
+            try {
+                int port = Integer.parseInt(value.trim());
+                if (port >= 0 && port <= 65535) {
+                    return port;
+                }
+            } catch (NumberFormatException e) {
+                // cai na mensagem abaixo
+            }
+            problems.add(name + " inválida: precisa ser um número inteiro de 0 (desativa) a 65535");
             return 0;
         }
 

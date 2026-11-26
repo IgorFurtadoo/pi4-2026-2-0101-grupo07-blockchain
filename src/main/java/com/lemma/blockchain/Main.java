@@ -19,12 +19,18 @@ import com.lemma.blockchain.repository.WalletRepository;
 import com.lemma.blockchain.service.TaskService;
 import com.lemma.blockchain.service.TaskWorker;
 import com.lemma.blockchain.service.WalletService;
+import com.lemma.blockchain.socket.ConnectionAcceptor;
+import com.lemma.blockchain.socket.Partner;
+import com.lemma.blockchain.socket.TaskNoticeBroadcaster;
 import io.javalin.Javalin;
 import org.hibernate.SessionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -32,8 +38,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Ponto de entrada do Blockchain Service.
  *
- * Lê a configuração, abre o acesso ao banco, sobe o Javalin e agenda o worker
- * (seção 7.1 do desenho). Se faltar variável,
+ * Lê a configuração, abre o acesso ao banco, sobe o servidor de socket (CT27), o
+ * Javalin e agenda o worker (seção 7.1 do desenho). Se faltar variável,
  * alguma for inválida ou o banco não bater com as entidades, encerra com código 1
  * e uma mensagem clara, antes de abrir a porta. As peças são montadas à mão aqui.
  */
@@ -78,8 +84,29 @@ public class Main {
         TaskController taskController = new TaskController(taskService);
         CoreApiClient coreApiClient = new CoreApiClient(config.coreApiWebhookUrl(), config.serviceKey(),
                 Duration.ofSeconds(WEBHOOK_TIMEOUT_SECONDS));
+        // Canal de socket (CT27, ADR 0008): a lista de assinantes é compartilhada, como a
+        // lista de usuários do Servidor do exemplo do professor.
+        List<Partner> subscribers = new ArrayList<>();
+        TaskNoticeBroadcaster broadcaster = new TaskNoticeBroadcaster(subscribers);
         TaskWorker taskWorker = new TaskWorker(taskRepository, walletRepository, keyCipher,
-                ethereumClient, coreApiClient, config.chainId());
+                ethereumClient, coreApiClient, broadcaster, config.chainId());
+
+        ConnectionAcceptor connectionAcceptor = null;
+        if (config.taskSocketPort() > 0) {
+            try {
+                connectionAcceptor = new ConnectionAcceptor(config.taskSocketPort(), config.serviceKey(), subscribers);
+            } catch (IOException e) {
+                log.error("Falha ao abrir a porta {} do socket ({})", config.taskSocketPort(),
+                        e.getClass().getSimpleName());
+                System.exit(1);
+                return;
+            }
+            connectionAcceptor.start();
+            log.info("socket: servidor aguardando assinantes na porta {}", config.taskSocketPort());
+        } else {
+            log.info("socket: desativado (TASK_SOCKET_PORT=0)");
+        }
+        ConnectionAcceptor acceptorToClose = connectionAcceptor;
 
         Javalin app = Javalin.create(javalin -> {
             javalin.jsonMapper(JsonConfig.jsonMapper());
@@ -107,6 +134,16 @@ public class Main {
             app.stop();
             stopWorker(workerExecutor);
             sessionFactory.close(); // só depois de o ciclo terminar: ele ainda pode gravar no banco
+            // Depois do banco, para não atrasar o fechamento; com o worker parado, nenhum
+            // aviso sai depois do ShutdownNotice.
+            try {
+                if (acceptorToClose != null) {
+                    acceptorToClose.close();
+                }
+                broadcaster.shutdown();
+            } catch (RuntimeException e) {
+                log.warn("socket: falha no desligamento ({})", e.getClass().getSimpleName());
+            }
         }));
 
         log.info("Blockchain Service no ar na porta {}; worker a cada {} s",

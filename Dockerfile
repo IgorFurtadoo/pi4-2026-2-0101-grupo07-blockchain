@@ -20,5 +20,6 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build /build/target/blockchain-service.jar /app/blockchain-service.jar
 
 USER app
-EXPOSE 8081
+# 8081: HTTP; 9091: socket de avisos de task (CT27), só na rede interna.
+EXPOSE 8081 9091
 ENTRYPOINT ["java", "-jar", "/app/blockchain-service.jar"]

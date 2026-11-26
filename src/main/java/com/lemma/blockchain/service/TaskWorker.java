@@ -6,11 +6,14 @@ import com.lemma.blockchain.client.ReceiptInfo;
 import com.lemma.blockchain.client.RpcException;
 import com.lemma.blockchain.client.RpcRejectedException;
 import com.lemma.blockchain.crypto.KeyCipher;
+import com.lemma.blockchain.dto.TaskResponse;
 import com.lemma.blockchain.model.FailureReason;
 import com.lemma.blockchain.model.Task;
 import com.lemma.blockchain.model.Wallet;
 import com.lemma.blockchain.repository.TaskRepository;
 import com.lemma.blockchain.repository.WalletRepository;
+import com.lemma.blockchain.socket.TaskNoticeBroadcaster;
+import com.lemma.socket.TaskCompletedNotice;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.web3j.crypto.Credentials;
@@ -41,7 +44,7 @@ import java.util.Set;
  * </ul>
  * A Fase A roda antes: uma task confirmada libera a carteira para a Fase B do
  * mesmo ciclo. Toda transição para estado final é gravada e depois avisada à
- * Core API pelo webhook (CT15).
+ * Core API pelo socket (CT27) e pelo webhook (CT15), nessa ordem.
  *
  * O Main chama {@link #runCycle()} a cada WORKER_INTERVAL_SECONDS, sempre na mesma
  * thread. Os testes chamam o ciclo direto, sem agendador.
@@ -73,15 +76,18 @@ public class TaskWorker {
     private final KeyCipher keyCipher;
     private final EthereumClient ethereumClient;
     private final CoreApiClient coreApiClient;
+    private final TaskNoticeBroadcaster broadcaster;
     private final long chainId;
 
     public TaskWorker(TaskRepository taskRepository, WalletRepository walletRepository, KeyCipher keyCipher,
-                      EthereumClient ethereumClient, CoreApiClient coreApiClient, long chainId) {
+                      EthereumClient ethereumClient, CoreApiClient coreApiClient,
+                      TaskNoticeBroadcaster broadcaster, long chainId) {
         this.taskRepository = taskRepository;
         this.walletRepository = walletRepository;
         this.keyCipher = keyCipher;
         this.ethereumClient = ethereumClient;
         this.coreApiClient = coreApiClient;
+        this.broadcaster = broadcaster;
         this.chainId = chainId;
     }
 
@@ -178,7 +184,7 @@ public class TaskWorker {
             log.warn("Task {}: FAILED/TRANSACTION_REVERTED, hash {} no bloco {}",
                     task.getTaskId(), task.getTransactionHash(), receipt.blockNumber());
         }
-        coreApiClient.notifyTaskCompleted(task);
+        notifyCompleted(task);
     }
 
     /**
@@ -202,7 +208,7 @@ public class TaskWorker {
             taskRepository.update(task);
             log.warn("Task {}: rede recusou o reenvio (erro {}: {}); FAILED/REJECTED_BY_NETWORK",
                     taskId, e.getRpcCode(), e.getNodeMessage());
-            coreApiClient.notifyTaskCompleted(task);
+            notifyCompleted(task);
         } catch (RpcException e) {
             log.warn("Task {}: sem resposta do RPC no reenvio ({}); continua PENDING", taskId, e.getMessage());
         }
@@ -309,7 +315,7 @@ public class TaskWorker {
             taskRepository.update(task);
             log.warn("Task {}: rede recusou o envio (erro {}: {}); FAILED/REJECTED_BY_NETWORK",
                     taskId, e.getRpcCode(), e.getNodeMessage());
-            coreApiClient.notifyTaskCompleted(task);
+            notifyCompleted(task);
             return;
         } catch (RpcException e) {
             // RpcUnavailableException: não se sabe se chegou. Não muda nada (emenda do CT23);
@@ -353,6 +359,26 @@ public class TaskWorker {
         task.markFailed(FailureReason.INTERNAL_ERROR, Instant.now());
         taskRepository.update(task);
         log.warn("Task {}: FAILED/INTERNAL_ERROR ({})", task.getTaskId(), detail);
+        notifyCompleted(task);
+    }
+
+    /**
+     * Avisa que a task chegou ao estado final, que já está gravado: primeiro pelo
+     * socket (CT27), depois pelo webhook (CT15). Os dois levam os mesmos valores
+     * (TaskResponse). O try/catch garante que falha no socket nunca muda o estado
+     * da task nem impede o webhook.
+     */
+    private void notifyCompleted(Task task) {
+        try {
+            TaskResponse body = TaskResponse.from(task);
+            broadcaster.broadcast(new TaskCompletedNotice(body.taskId(), body.status().name(),
+                    body.transactionHash(),
+                    body.failureReason() == null ? null : body.failureReason().name(),
+                    body.updatedAt()));
+        } catch (RuntimeException e) {
+            log.warn("Task {}: falha no aviso pelo socket ({}); segue para o webhook",
+                    task.getTaskId(), e.getClass().getSimpleName());
+        }
         coreApiClient.notifyTaskCompleted(task);
     }
 

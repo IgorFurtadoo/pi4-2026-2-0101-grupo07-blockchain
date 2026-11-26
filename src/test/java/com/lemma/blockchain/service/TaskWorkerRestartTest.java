@@ -9,6 +9,7 @@ import com.lemma.blockchain.model.FailureReason;
 import com.lemma.blockchain.model.Task;
 import com.lemma.blockchain.model.TaskStatus;
 import com.lemma.blockchain.model.Wallet;
+import com.lemma.blockchain.socket.TaskNoticeBroadcaster;
 import com.lemma.blockchain.service.TaskWorkerTest.Stored;
 import org.junit.jupiter.api.Test;
 import org.web3j.crypto.ECKeyPair;
@@ -19,6 +20,7 @@ import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -131,7 +133,8 @@ class TaskWorkerRestartTest {
 
     /** Worker sobre o banco, a rede e a Core API deste teste. Não guarda estado entre ciclos. */
     private TaskWorker newWorker() {
-        return new TaskWorker(taskRepository, walletRepository, keyCipher, network, coreApi, CHAIN_ID);
+        return new TaskWorker(taskRepository, walletRepository, keyCipher, network, coreApi,
+                new TaskNoticeBroadcaster(new ArrayList<>()), CHAIN_ID);
     }
 
     /**
